@@ -42,3 +42,17 @@ config.max_actions：必须是正整数
 JSON 无法解析时只报告可确定的解析错误，不假装已检查其内部字段。错误不得回显原始输入值、实际数据引用值或密钥。自然语言目标是否合理、断言能否从图片判断，分别由执行和验收处理，解析器不推断其含义。
 
 输入与配置全部通过后才允许创建浏览器资源。输入失败仍由 Session 保存可用的错误结果；尚未取得的 TestCase、截图、Submission 或 Verdict 留空。
+
+## M1 已落实的启动契约
+
+run 入口首先记录单调时钟起点。仅在 timeout_seconds 为有限正数且非布尔值时建立截止时间；
+仅在 output_dir 为非空白、不含 NUL 的字符串时尝试独占记录目录。
+随后 prepare 聚合完整用例及配置错误；目录配置无效时返回内存结果，可用目录则尝试保存。
+所有校验完成前不创建 Browser、不请求模型。M1 合法输入由 prepare 返回 PreparedSession；
+Session 的合法执行路径在 M2 接入，当前明确返回 execution_unavailable。
+
+SessionConfig 严格接受以下必填字段：entry_url（HTTP/HTTPS URL）、data_values（字符串映射）、
+max_actions、execution_request_limit、verification_request_limit、tool_call_limit、
+tool_retry_limit、verification_retry_limit、timeout_seconds、output_dir。
+六项整数额度必须为正整数，不接受布尔值或字符串；timeout_seconds 为有限正数。
+未知字段拒绝；错误仅包含可信字段路径和固定错误码，不包含未知字段名或引用映射键值。
