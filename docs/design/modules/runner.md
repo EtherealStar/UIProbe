@@ -65,3 +65,7 @@ run 入口首先记录单调时钟起点。仅在 timeout_seconds 为有限正�
 Session 的合法执行路径在 M2 接入，当前明确返回 execution_unavailable。
 
 配置字段及严格类型约束见 [输入解析](case-input.md#m1-已落实的启动契约)。
+
+### 收尾记录等待
+
+最终事件和结果写入使用独立线程处理 SessionResult 快照，Session 等待上限为五秒。等待超时返回 recording/finalization_timeout；不声明结果文件已经保存，仅返回已成功创建的会话目录。线程不执行浏览器或模型操作，也不能修改返回结果。操作系统中已经开始的文件写入可能稍后完成；此时限约束 Session 等待，不承诺中断内核文件 I/O。

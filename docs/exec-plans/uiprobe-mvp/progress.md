@@ -2,8 +2,8 @@
 
 ## Current State
 
-- Status：in progress（M1、M2、M3 已完成）；计划包已编写，10 份 ticket 已发布到本地 issues。
-- Current milestone：M4 有界执行与完整证据（尚未开始）。
+- Status：in progress（M1、M2、M3、M4 已完成）；计划包已编写，10 份 ticket 已发布到本地 issues。
+- Current milestone：M5 命令行 MVP 验收（尚未开始）。
 - Last updated：2026-11-13，Asia/Shanghai。
 - Tracker：用户已确认本地；已发布为 ready-for-agent。
 
@@ -19,10 +19,10 @@
   - [x] 计划后点击及派发计数接口。
   - [x] 引用值登录。
   - [x] 页面滚动与有界等待。
-- [ ] M4：有界执行与完整证据（07、08、09）
-  - [ ] 工具禁用及框架预算。
-  - [ ] 完整历史及唯一最新图。
-  - [ ] 跨阶段失败、超时与取消。
+- [x] M4：有界执行与完整证据（07、08、09）
+  - [x] 工具禁用及框架预算。
+  - [x] 完整历史及唯一最新图。
+  - [x] 跨阶段失败、超时与取消，以及独立有界的收尾保存等待。
 - [ ] M5：命令行 MVP 验收（10）
   - [ ] 应用装配、标准格式样例和 README。
   - [ ] 离线回归及真实模型演示证据。
@@ -85,3 +85,15 @@ M1、M2 均已完成；合法输入经过真实浏览器初图、框架提交和
 - Ruff check、format --check、pyright 和 diff --check 通过。
 - code-review 双轴审查：修复截图按图片内容误关联、模型工具说明缺失、输入／输出截图及耗时字段缺失。保留未过滤原生历史；唯一最新图片过滤与三次观察重建由 M4 完成，不提前宣称通过。
 - 后续动作额度禁用、综合失败矩阵、CLI 和真实模型验收仍未完成。
+
+## M4 验证证据（2026-11-13）
+
+- 实现动作额度后的全部工具禁用，包括同响应 TODO／click；总结留在框架循环，持续调用受请求额度限制。
+- Context 保存过滤前完整原生历史，发送视图仅保留最新 PNG；框架 iter 的最终状态补存请求耗尽时的工具结果。
+- 新增 test_agent_budget.py（4 项）、test_context_recording.py（2 项）、test_session_lifecycle.py（5 项），覆盖三次观察、历史尾部、真实浏览器截图／新窗口／派发／记录故障、独立验收通过后清理失败、超时和取消传播。
+- 全量：uv --cache-dir /tmp/uiprobe-uv-cache run python -m unittest discover -s tests -v，47 tests，OK。真实 Chromium 在批准的沙箱外环境执行；无真实模型调用。
+- 双轴 code-review 修复总结提示遗漏、额度耗尽时历史尾部遗漏及过期截止时间仍启动截图的问题。
+- 测试顺序：额度测试与历史尾部回归先失败后修复；其余场景在接合后补测，未声明完整 TDD。
+- 收尾事件与结果保存在线程中处理独立结果快照，Session 最多等待五秒；阻塞保存回归验证有界返回且后台完成不能修改返回对象。内核文件 I/O 可能稍后完成，超时结果不声明 result.json 已保存。M4 已完成，M5 未开始。
+- Ruff check、format --check、Pyright 与 git diff --check 均通过。
+- 最终保存等待期间的取消先尝试完成已有写入，再保存取消结果并传播；回归验证 Verdict 保持 passed，而保存结果为 cancelled/error。

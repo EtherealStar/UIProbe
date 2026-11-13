@@ -3,6 +3,7 @@
 import asyncio
 import math
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -95,6 +96,8 @@ class Session:
                     async with asyncio.timeout_at(deadline):
                         record.append({"type": "session_started"})
                         started_record = True
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
                         browser = (self.browser_factory or Browser)()
                         state = await browser.open(
                             prepared.config.entry_url,
@@ -108,6 +111,8 @@ class Session:
                         )
                         phase = "execution"
                         assert self.agent is not None and self.verification is not None
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
                         result.submission = await self.agent.execute(
                             context,
                             browser=browser,
@@ -123,6 +128,8 @@ class Session:
                             {"type": "submission", "text": result.submission.text}
                         )
                         phase = "verification"
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError
                         result.verdict = await self.verification.evaluate(
                             prepared.test_case,
                             context.browser_state.screenshot,
@@ -179,28 +186,64 @@ class Session:
                 SessionError("input", "timeout", "Input preparation exceeded deadline")
             )
         if record is not None:
+            snapshot = deepcopy(result)
+            saving = asyncio.create_task(
+                asyncio.to_thread(self._finish_record, record, snapshot, started_record)
+            )
             try:
-                if not started_record:
-                    record.append({"type": "session_started"})
-                for error in result.errors:
-                    record.append({"type": "error", **error.__dict__})
-                record.append({"type": "session_finished", "status": result.status})
-            except OSError:
+                async with asyncio.timeout(5):
+                    result = await asyncio.shield(saving)
+            except asyncio.CancelledError:
+                cancelled = True
                 result.status = "error"
+                result.stop_reason = "cancelled"
                 result.errors.append(
-                    SessionError("recording", "append_failed", "Cannot append record")
-                )
-            try:
-                result.artifact_paths = record.finish(result, [])
-            except OSError:
-                result.status = "error"
-                result.errors.append(
-                    SessionError("recording", "finish_failed", "Cannot save result")
+                    SessionError("recording", "cancelled", "Session cancelled")
                 )
                 try:
-                    result.artifact_paths = record.artifact_paths
-                except OSError:
-                    result.artifact_paths = []
+                    async with asyncio.timeout(5):
+                        await asyncio.shield(saving)
+                        result = await asyncio.to_thread(
+                            self._finish_record, record, deepcopy(result), True
+                        )
+                except (TimeoutError, asyncio.CancelledError):
+                    pass
+            except TimeoutError:
+                result.status = "error"
+                result.errors.append(
+                    SessionError(
+                        "recording",
+                        "finalization_timeout",
+                        "Record finalization exceeded deadline",
+                    )
+                )
+                result.artifact_paths = [str(record.directory)]
         if cancelled:
             raise asyncio.CancelledError
+        return result
+
+    @staticmethod
+    def _finish_record(record, result, started_record):
+        try:
+            if not started_record:
+                record.append({"type": "session_started"})
+            for error in result.errors:
+                record.append({"type": "error", **error.__dict__})
+            record.append({"type": "session_finished", "status": result.status})
+        except OSError:
+            result.status = "error"
+            result.errors.append(
+                SessionError("recording", "append_failed", "Cannot append record")
+            )
+        try:
+            result.artifact_paths = record.finish(result, [])
+        except OSError:
+            result.status = "error"
+            result.errors.append(
+                SessionError("recording", "finish_failed", "Cannot save result")
+            )
+            try:
+                result.artifact_paths = record.artifact_paths
+            except OSError:
+                result.artifact_paths = []
         return result

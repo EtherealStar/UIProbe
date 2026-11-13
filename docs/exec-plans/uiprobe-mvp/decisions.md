@@ -84,3 +84,11 @@ Consequences：首图先保存 PNG 后写事件，完整消息将图片转为引
 ## 2026-11-13：浏览器动作派发接合
 
 采用 before_dispatch 小型回调，Browser 自身预检通过后调用 RunBudget.claim_browser_action，再实际派发；不注入整个 Session。WrapperToolset.call_tool 包含操作、单次截图、记录及 Context 更新。真实框架同响应 TODO／click／旧图 click 测试证明串行屏障覆盖包装层。wait 单次上限选择 10000 毫秒，剩余时间不足时预检拒绝。
+
+## 2026-11-13：有界执行与原生证据保存
+
+采用 WrapperToolset.get_tools 禁止后续请求使用工具，call_tool 再拒绝同响应剩余调用。
+Context 在 ProcessHistory 过滤前保存原生消息，保留观察文本，仅发送最新 PNG。
+使用框架 agent.iter 自动推进原有循环，并在退出时读取 all_messages 的未记录尾部，避免请求额度检查早于 ProcessHistory 时丢失工具结果；不创建第二套模型循环。
+
+收尾保留已有结论和主 stop_reason。最终事件和结果保存改为在线程中处理结果快照，Session 使用独立五秒等待上限。超时返回内存错误及已创建会话目录；后台写入不能修改返回对象。内核 I/O 不可由 asyncio 取消，可能稍后完成；约束的是 Session 等待时间。此行为已写入正式 Session 设计，并以阻塞保存回归验证。

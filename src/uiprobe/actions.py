@@ -116,6 +116,11 @@ class ActionSummary(TypedDict, total=False):
 
 
 class ActionToolset(WrapperToolset[Dependencies]):
+    async def get_tools(self, ctx):
+        if ctx.deps.budget.action_count >= ctx.deps.budget.max_actions:
+            return {}
+        return await super().get_tools(ctx)
+
     async def call_tool(self, name, tool_args, ctx, tool):
         d = ctx.deps
         started = asyncio.get_running_loop().time()
@@ -123,6 +128,10 @@ class ActionToolset(WrapperToolset[Dependencies]):
         event = {"call_id": ctx.tool_call_id, "tool": name}
         d.record.append({"type": "tool_started", **event})
         try:
+            if asyncio.get_running_loop().time() >= d.budget.deadline_at:
+                raise TimeoutError
+            if d.budget.action_count >= d.budget.max_actions:
+                raise ModelRetry("Action budget exhausted; summarize and submit")
             if (tool.tool_def.metadata or {}).get("refresh_browser_state"):
                 if not d.context.plan_created:
                     raise ModelRetry("Create a nonempty TODO before browser actions")

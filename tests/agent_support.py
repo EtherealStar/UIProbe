@@ -23,7 +23,9 @@ def calls(*items):
     )
 
 
-async def run_actions(responses, html, *, values=None):
+async def run_actions(
+    responses, html, *, values=None, max_actions=20, request_limit=20
+):
     requests = []
 
     def respond(messages, info):
@@ -34,7 +36,7 @@ async def run_actions(responses, html, *, values=None):
 
     browser = Browser()
     deadline = asyncio.get_running_loop().time() + 30
-    budget = RunBudget(deadline, 20)
+    budget = RunBudget(deadline, max_actions)
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory, "page.html")
         path.write_text(html)
@@ -49,12 +51,16 @@ async def run_actions(responses, html, *, values=None):
                 context,
                 record=record,
                 deadline_at=deadline,
-                request_limit=20,
+                request_limit=request_limit,
                 retry_limit=8,
                 browser=browser,
                 budget=budget,
                 tool_call_limit=40,
             )
+            history = json.loads((record.directory / "history.json").read_text())
+            assert "screenshot" in str(history)
+            for observation in record.directory.joinpath("screenshots").iterdir():
+                assert observation.read_bytes().startswith(b"\x89PNG")
             assert browser.page is not None
             content = await browser.page.content()
             events = [

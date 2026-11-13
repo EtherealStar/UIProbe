@@ -32,6 +32,8 @@ class Browser:
     async def open(
         self, entry_url: str, data_values: dict[str, str], deadline_at: float
     ) -> BrowserState:
+        if asyncio.get_running_loop().time() >= deadline_at:
+            raise TimeoutError
         self.data_values = dict(data_values)
         async with asyncio.timeout_at(deadline_at):
             self.playwright = await async_playwright().start()
@@ -46,6 +48,8 @@ class Browser:
 
     async def capture(self, deadline_at: float) -> BrowserState:
         assert self.page is not None
+        if asyncio.get_running_loop().time() >= deadline_at:
+            raise TimeoutError
         async with asyncio.timeout_at(deadline_at):
             if len(self.context.pages) != 1:
                 raise RuntimeError("Multiple pages are unsupported")

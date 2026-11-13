@@ -2,13 +2,13 @@
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from openai import AsyncOpenAI
 from pydantic_ai import Agent as FrameworkAgent
 from pydantic_ai import BinaryContent
 from pydantic_ai.capabilities import Hooks, ProcessHistory
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -35,6 +35,28 @@ class Context:
     plan_created: bool = False
     history: list[ModelMessage] = field(default_factory=list)
 
+    def messages_for_model(self) -> list[ModelMessage]:
+        view = []
+        for message in self.history:
+            if isinstance(message, ModelRequest):
+                parts = []
+                for part in message.parts:
+                    if isinstance(part, UserPromptPart) and isinstance(
+                        part.content, list
+                    ):
+                        part = replace(
+                            part,
+                            content=[
+                                item
+                                for item in part.content
+                                if not isinstance(item, BinaryContent)
+                            ],
+                        )
+                    parts.append(part)
+                message = replace(message, parts=parts)
+            view.append(message)
+        return view
+
 
 class ExecutionAgent:
     def __init__(self, model: Model):
@@ -52,37 +74,51 @@ class ExecutionAgent:
         budget: RunBudget,
         tool_call_limit: int,
     ) -> Submission:
-        async def capture(messages: list[ModelMessage]) -> list[ModelMessage]:
-            context.history = list(messages)
-            record.save_messages(
-                "execution", messages, context.browser_state.screenshot
-            )
-            from pydantic_ai.messages import ModelRequest, UserPromptPart
+        seen = 0
 
+        async def capture(messages: list[ModelMessage]) -> list[ModelMessage]:
+            nonlocal seen
+            if asyncio.get_running_loop().time() >= deadline_at:
+                raise TimeoutError
+            context.history.extend(messages[seen:])
             state = context.browser_state
-            return [
-                *messages,
-                ModelRequest(
-                    parts=[
-                        UserPromptPart(
-                            [
-                                f"Current screenshot: {state.screenshot.screenshot_id}; image {state.screenshot.image_width}x{state.screenshot.image_height}; viewport {state.viewport_width}x{state.viewport_height}",
-                                BinaryContent(
-                                    data=state.screenshot.png,
-                                    media_type="image/png",
-                                    identifier=state.screenshot.screenshot_id,
-                                ),
-                            ]
-                        )
-                    ]
-                ),
-            ]
+            observation = ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        [
+                            f"Current screenshot: {state.screenshot.screenshot_id}; image {state.screenshot.image_width}x{state.screenshot.image_height}; viewport {state.viewport_width}x{state.viewport_height}",
+                            BinaryContent(
+                                data=state.screenshot.png,
+                                media_type="image/png",
+                                identifier=state.screenshot.screenshot_id,
+                            ),
+                        ]
+                    )
+                ]
+            )
+            context.history.append(observation)
+            if budget.action_count >= budget.max_actions:
+                context.history.append(
+                    ModelRequest(
+                        parts=[
+                            UserPromptPart(
+                                "Action budget exhausted; all tools disabled. Summarize and submit."
+                            )
+                        ]
+                    )
+                )
+            record.save_messages("execution", context.history, state.screenshot)
+            view = context.messages_for_model()
+            view[-2 if budget.action_count >= budget.max_actions else -1] = observation
+            seen = len(view)
+            return view
 
         async def after_response(ctx, *, request_context, response):
-            messages = [*request_context.messages, response]
-            context.history = messages
+            nonlocal seen
+            context.history.append(response)
+            seen = len(request_context.messages) + 1
             record.save_messages(
-                "execution", messages, context.browser_state.screenshot
+                "execution", context.history, context.browser_state.screenshot
             )
             return response
 
@@ -111,14 +147,20 @@ class ExecutionAgent:
         )
         try:
             async with asyncio.timeout_at(deadline_at):
-                result = await agent.run(
+                async with agent.iter(
                     prompt,
                     deps=Dependencies(context, browser, budget, record),
                     usage_limits=UsageLimits(
                         request_limit=request_limit, tool_calls_limit=tool_call_limit
                     ),
-                )
-            context.history = result.all_messages()
+                ) as run:
+                    try:
+                        async for _ in run:
+                            pass
+                    finally:
+                        context.history.extend(run.all_messages()[seen:])
+                    result = run.result
+                    assert result is not None
             return Submission(result.output)
         finally:
             record.save_messages("execution", context.history, state.screenshot)
