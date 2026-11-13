@@ -14,6 +14,7 @@ from openai import (
     InternalServerError,
     RateLimitError,
 )
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 
 from uiprobe.model_service import ModelService, ModelServiceConfig
 
@@ -31,7 +32,10 @@ def completion(message, finish_reason="stop"):
 
 class ConfigTests(unittest.TestCase):
     def test_load_dotenv_without_modifying_environment(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {}, clear=True),
+        ):
             path = Path(directory) / ".env"
             path.write_text(
                 "OPENAI_BASE_URL=https://models.example/v1\n"
@@ -48,8 +52,9 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn(config.api_key, repr(config))
 
     def test_environment_overrides_file(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {"OPENAI_MODEL": "environment-model"}, clear=True
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"OPENAI_MODEL": "environment-model"}, clear=True),
         ):
             path = Path(directory) / ".env"
             path.write_text(
@@ -61,7 +66,10 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.timeout, 60)
 
     def test_missing_configuration_reports_field(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {}, clear=True),
+        ):
             with self.assertRaisesRegex(ValueError, "OPENAI_BASE_URL is required"):
                 ModelServiceConfig.from_env(Path(directory) / "missing.env")
 
@@ -73,12 +81,14 @@ class ModelServiceTests(unittest.IsolatedAsyncioTestCase):
             "uiprobe.model_service.AsyncOpenAI",
             side_effect=lambda **kwargs: AsyncOpenAI(http_client=http_client, **kwargs),
         ):
-            service = ModelService(ModelServiceConfig(
-                base_url="https://models.example/custom/v1",
-                api_key="test-key",
-                model="test-model",
-                timeout=30,
-            ))
+            service = ModelService(
+                ModelServiceConfig(
+                    base_url="https://models.example/custom/v1",
+                    api_key="test-key",
+                    model="test-model",
+                    timeout=30,
+                )
+            )
         self.addAsyncCleanup(service.close)
         return service
 
@@ -87,67 +97,128 @@ class ModelServiceTests(unittest.IsolatedAsyncioTestCase):
 
         def handler(request):
             requests.append(request)
-            return httpx2.Response(200, json=completion({"role": "assistant", "content": "收到"}))
+            return httpx2.Response(
+                200, json=completion({"role": "assistant", "content": "收到"})
+            )
 
         service = self.service(handler)
-        messages = [{"role": "user", "content": "你好"}]
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "user", "content": "你好"}
+        ]
         async with service:
             response = await service.complete(messages)
         self.assertEqual(len(requests), 1)
-        self.assertEqual(str(requests[0].url), "https://models.example/custom/v1/chat/completions")
+        self.assertEqual(
+            str(requests[0].url), "https://models.example/custom/v1/chat/completions"
+        )
         self.assertEqual(requests[0].headers["authorization"], "Bearer test-key")
-        self.assertEqual(json.loads(requests[0].content), {
-            "model": "test-model", "messages": messages, "stream": False,
-        })
+        self.assertEqual(
+            json.loads(requests[0].content),
+            {
+                "model": "test-model",
+                "messages": messages,
+                "stream": False,
+            },
+        )
         self.assertEqual(response.choices[0].message.content, "收到")
         self.assertEqual(response.choices[0].finish_reason, "stop")
+        assert response.usage is not None
         self.assertEqual(response.usage.total_tokens, 15)
         self.assertTrue(service.client.is_closed())
 
     async def test_images_tools_and_invalid_arguments_pass_through(self):
         calls = [
-            {"id": "call-1", "type": "function", "function": {"name": "click", "arguments": "{invalid"}},
-            {"id": "call-2", "type": "function", "function": {"name": "unknown", "arguments": '{"x":"1"}'}},
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "click", "arguments": "{invalid"},
+            },
+            {
+                "id": "call-2",
+                "type": "function",
+                "function": {"name": "unknown", "arguments": '{"x":"1"}'},
+            },
         ]
         requests = []
 
         def handler(request):
             requests.append(json.loads(request.content))
-            return httpx2.Response(200, json=completion(
-                {"role": "assistant", "content": None, "tool_calls": calls}, "tool_calls"
-            ))
+            return httpx2.Response(
+                200,
+                json=completion(
+                    {"role": "assistant", "content": None, "tool_calls": calls},
+                    "tool_calls",
+                ),
+            )
 
         service = self.service(handler)
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "截图 f0"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aW1hZ2U="}},
-        ]}]
-        tools = [{"type": "function", "function": {
-            "name": "click", "description": "Click a point", "parameters": {"type": "object"},
-        }}]
+        messages: list[ChatCompletionMessageParam] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "截图 f0"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+                    },
+                ],
+            }
+        ]
+        tools: list[ChatCompletionToolUnionParam] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "click",
+                    "description": "Click a point",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
         response = await service.complete(messages, tools=tools)
-        self.assertEqual(requests, [{
-            "model": "test-model", "messages": messages, "tools": tools, "stream": False,
-        }])
-        self.assertEqual([call.model_dump() for call in response.choices[0].message.tool_calls], calls)
+        self.assertEqual(
+            requests,
+            [
+                {
+                    "model": "test-model",
+                    "messages": messages,
+                    "tools": tools,
+                    "stream": False,
+                }
+            ],
+        )
+        tool_calls = response.choices[0].message.tool_calls
+        assert tool_calls is not None
+        self.assertEqual(
+            [call.model_dump() for call in tool_calls],
+            calls,
+        )
 
     async def test_no_tool_call_is_a_response(self):
-        service = self.service(lambda request: httpx2.Response(
-            200, json=completion({"role": "assistant", "content": "完成"})
-        ))
+        service = self.service(
+            lambda request: httpx2.Response(
+                200, json=completion({"role": "assistant", "content": "完成"})
+            )
+        )
         response = await service.complete([{"role": "user", "content": "继续"}])
         self.assertIsNone(response.choices[0].message.tool_calls)
         self.assertEqual(response.choices[0].message.content, "完成")
 
     async def test_sdk_http_errors_propagate_without_retry(self):
-        for status, error_type in [(401, AuthenticationError), (429, RateLimitError), (500, InternalServerError)]:
+        for status, error_type in [
+            (401, AuthenticationError),
+            (429, RateLimitError),
+            (500, InternalServerError),
+        ]:
             with self.subTest(status=status):
                 requests = []
 
                 def handler(request):
                     requests.append(request)
                     return httpx2.Response(
-                        status, json={"error": {"message": "service error", "type": "test_error"}},
+                        status,
+                        json={
+                            "error": {"message": "service error", "type": "test_error"}
+                        },
                         headers={"x-request-id": "request-failed"},
                     )
 
@@ -180,7 +251,9 @@ class ModelServiceTests(unittest.IsolatedAsyncioTestCase):
 
         def handler(request):
             timeouts.append(request.extensions["timeout"])
-            return httpx2.Response(200, json=completion({"role": "assistant", "content": "ok"}))
+            return httpx2.Response(
+                200, json=completion({"role": "assistant", "content": "ok"})
+            )
 
         service = self.service(handler)
         await service.complete([{"role": "user", "content": "hello"}])

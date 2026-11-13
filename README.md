@@ -22,9 +22,11 @@ from uiprobe.model_service import ModelService, ModelServiceConfig
 async def main():
     config = ModelServiceConfig.from_env()
     async with ModelService(config) as service:
-        response = await service.complete([
-            {"role": "user", "content": "请回复：连接成功"},
-        ])
+        response = await service.complete(
+            [
+                {"role": "user", "content": "请回复：连接成功"},
+            ]
+        )
         print(response.choices[0].message.content)
 
 
@@ -43,4 +45,23 @@ API、连接和超时错误直接使用 SDK 异常。`timeout` 参数可覆盖�
 
 ```bash
 uv run python -m unittest discover -s tests -v
+```
+
+## Static checks
+
+Install the development tools with `uv sync`, then run:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+```
+
+Ruff checks Python code and import order; Pyright checks types in `src/` and
+`tests/` using standard mode. Scratch prototypes are outside the check scope.
+To format code and sort imports:
+
+```bash
+uv run ruff check --select I --fix .
+uv run ruff format .
 ```

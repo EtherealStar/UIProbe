@@ -1,13 +1,17 @@
 """Strict input preparation independent of runtime resources."""
+
 import json
 import math
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 from typing import TypeVar
+from urllib.parse import urlsplit
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
 
 class StrictValue(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
 
 class Execution(StrictValue):
     goal: str
@@ -20,6 +24,7 @@ class Execution(StrictValue):
             raise ValueError("blank text")
         return value
 
+
 class Assertion(StrictValue):
     id: str
     expected: str
@@ -29,9 +34,11 @@ class Assertion(StrictValue):
     def nonblank(cls, value: str) -> str:
         return Execution.nonblank(value)
 
+
 class TestCase(StrictValue):
     execution: Execution
     assertions: list[Assertion] = Field(min_length=1)
+
 
 class SessionConfig(StrictValue):
     entry_url: str
@@ -63,7 +70,7 @@ class SessionConfig(StrictValue):
     @field_validator("timeout_seconds", mode="before")
     @classmethod
     def numeric_timeout(cls, value: object) -> object:
-        if type(value) not in (float, int):
+        if not isinstance(value, (float, int)) or type(value) not in (float, int):
             raise ValueError("invalid timeout")
         try:
             if not math.isfinite(value):
@@ -72,37 +79,51 @@ class SessionConfig(StrictValue):
             raise ValueError("invalid timeout") from None
         return value
 
+
 @dataclass(frozen=True)
 class FieldError:
     path: str
     reason: str
 
+
 @dataclass(frozen=True)
 class InputError:
     errors: list[FieldError]
+
 
 @dataclass(frozen=True)
 class PreparedSession:
     test_case: TestCase
     config: SessionConfig = field(repr=False)
 
+
 Value = TypeVar("Value", bound=BaseModel)
 
 
-def _validate(model: type[Value], value: object, prefix: str,
-              errors: list[FieldError]) -> Value | None:
+def _validate(
+    model: type[Value], value: object, prefix: str, errors: list[FieldError]
+) -> Value | None:
     try:
         return model.model_validate(value)
     except ValidationError as exc:
         for error in exc.errors(include_input=False, include_context=False):
             path = prefix
-            location = error["loc"][:-1] if error["type"] == "extra_forbidden" else error["loc"]
+            location = (
+                error["loc"][:-1]
+                if error["type"] == "extra_forbidden"
+                else error["loc"]
+            )
             for part in location:
-                path += f"[{part}]" if isinstance(part, int) else ("." if path else "") + part
+                path += (
+                    f"[{part}]"
+                    if isinstance(part, int)
+                    else ("." if path else "") + part
+                )
             if path.startswith("config.data_values"):
                 path = "config.data_values"
             errors.append(FieldError(path, error["type"]))
         return None
+
 
 def prepare(test_json: str, config: object) -> PreparedSession | InputError:
     errors: list[FieldError] = []
@@ -119,7 +140,9 @@ def prepare(test_json: str, config: object) -> PreparedSession | InputError:
                 if isinstance(assertion, dict) and isinstance(assertion.get("id"), str):
                     identifier = assertion["id"]
                     if identifier in seen:
-                        errors.append(FieldError(f"assertions[{index}].id", "duplicate_id"))
+                        errors.append(
+                            FieldError(f"assertions[{index}].id", "duplicate_id")
+                        )
                     seen.add(identifier)
     parsed_config = _validate(SessionConfig, config, "config", errors)
     if errors:
