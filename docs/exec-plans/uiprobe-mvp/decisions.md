@@ -69,3 +69,14 @@ Recorder 独占创建目录，以同目录临时文件更名保存结果。配�
 
 Consequences：错误不回显未知字段名、引用映射键值或底层异常正文。M1 仅实现输入失败路径；
 合法输入由 prepare 返回 PreparedSession，Session 正常执行留待 M2。当前没有已配置的静态类型检查器。
+
+## 2026-11-13：初始观察与独立验收接合
+
+Decision：复用应用持有的 AsyncOpenAI 客户端，通过 OpenAIChatModel／OpenAIProvider 接入框架；Session 不关闭借用客户端。
+验收的 record、request_limit、retry_limit 每次调用显式传入，实例只保存模型。
+
+Evidence：锁定 Pydantic AI 2.68.0 使用 ProcessHistory capability 和 Hooks.after_model_request；
+真实 Chromium 与受控 SDK 响应已贯通连续运行。验收输出使用结构化工具输出和框架 ModelRetry，不手写循环。
+
+Consequences：首图先保存 PNG 后写事件，完整消息将图片转为引用，验收记录独立。
+多轮图片过滤保留给 08；工具、动作预算与登录保留给后续批次。无真实模型验收声明。

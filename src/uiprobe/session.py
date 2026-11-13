@@ -1,11 +1,15 @@
-"""The M1 input failure path; later milestones add browser execution."""
+"""Run-local browser, execution and independent verification lifecycle."""
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from .agent import Context
+from .browser import Browser
 from .case_input import InputError, TestCase, prepare
+from .observation import Submission, Verdict
 from .recording import Recorder
 
 
@@ -22,10 +26,10 @@ class SessionResult:
     test_case: TestCase | None = None
     status: str = "error"
     stop_reason: str = "input_error"
-    submission: None = None
+    submission: Submission | None = None
     action_count: int = 0
     last_screenshot_id: str | None = None
-    verdict: None = None
+    verdict: Verdict | None = None
     artifact_paths: list[str] = field(default_factory=list)
     errors: list[SessionError] = field(default_factory=list)
 
@@ -43,6 +47,8 @@ class Session:
         started = time.monotonic()
         result = SessionResult(uuid4().hex)
         record = None
+        cancelled = False
+        started_record = False
         timeout = config.get("timeout_seconds") if isinstance(config, dict) else None
         try:
             deadline = (
@@ -75,31 +81,105 @@ class Session:
             )
         else:
             result.test_case = prepared.test_case
-            result.stop_reason = "execution_unavailable"
-            result.errors.append(
-                SessionError(
-                    "execution",
-                    "not_implemented",
-                    "Browser execution is not implemented in M1",
-                )
-            )
-        if deadline is not None and time.monotonic() >= deadline:
+            browser = None
+            if record is not None and not result.errors:
+                phase = "initialization"
+                try:
+                    assert deadline is not None
+                    async with asyncio.timeout_at(deadline):
+                        record.append({"type": "session_started"})
+                        started_record = True
+                        browser = (self.browser_factory or Browser)()
+                        state = await browser.open(
+                            prepared.config.entry_url,
+                            prepared.config.data_values,
+                            deadline,
+                        )
+                        result.last_screenshot_id = state.screenshot.screenshot_id
+                        record.save_screenshot(state.screenshot)
+                        context = Context(
+                            prepared.test_case, list(prepared.config.data_values), state
+                        )
+                        phase = "execution"
+                        assert self.agent is not None and self.verification is not None
+                        result.submission = await self.agent.execute(
+                            context,
+                            record=record,
+                            deadline_at=deadline,
+                            request_limit=prepared.config.execution_request_limit,
+                            retry_limit=prepared.config.tool_retry_limit,
+                        )
+                        assert result.submission is not None
+                        record.append(
+                            {"type": "submission", "text": result.submission.text}
+                        )
+                        phase = "verification"
+                        result.verdict = await self.verification.evaluate(
+                            prepared.test_case,
+                            context.browser_state.screenshot,
+                            deadline,
+                            record=record,
+                            request_limit=prepared.config.verification_request_limit,
+                            retry_limit=prepared.config.verification_retry_limit,
+                        )
+                        assert result.verdict is not None
+                        result.status = result.verdict.status
+                        result.stop_reason = "verification_completed"
+                except asyncio.CancelledError:
+                    result.stop_reason = "cancelled"
+                    cancelled = True
+                    result.errors.append(
+                        SessionError(phase, "cancelled", "Session cancelled")
+                    )
+                except Exception as exc:
+                    result.stop_reason = phase + "_error"
+                    result.errors.append(
+                        SessionError(
+                            "recording"
+                            if isinstance(exc, OSError)
+                            and not isinstance(exc, TimeoutError)
+                            else phase,
+                            "run_failed",
+                            "Session phase failed",
+                        )
+                    )
+                finally:
+                    if browser is not None:
+                        try:
+                            async with asyncio.timeout(5):
+                                await browser.close()
+                        except Exception:
+                            result.errors.append(
+                                SessionError(
+                                    "cleanup", "close_failed", "Cannot close browser"
+                                )
+                            )
+                    if result.errors:
+                        result.status = "error"
+        if (
+            isinstance(prepared, InputError)
+            and deadline is not None
+            and time.monotonic() >= deadline
+        ):
             result.errors.append(
                 SessionError("input", "timeout", "Input preparation exceeded deadline")
             )
         if record is not None:
             try:
-                record.append({"type": "session_started"})
+                if not started_record:
+                    record.append({"type": "session_started"})
                 for error in result.errors:
                     record.append({"type": "error", **error.__dict__})
                 record.append({"type": "session_finished", "status": result.status})
             except OSError:
+                result.status = "error"
                 result.errors.append(
                     SessionError("recording", "append_failed", "Cannot append record")
                 )
             try:
                 result.artifact_paths = record.finish(result, [])
             except OSError:
+                result.status = "error"
                 result.errors.append(
                     SessionError("recording", "finish_failed", "Cannot save result")
                 )
@@ -107,4 +187,6 @@ class Session:
                     result.artifact_paths = record.artifact_paths
                 except OSError:
                     result.artifact_paths = []
+        if cancelled:
+            raise asyncio.CancelledError
         return result

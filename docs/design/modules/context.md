@@ -50,3 +50,9 @@ TODO 不修改 BrowserState、不占浏览器动作数。未全部完成不阻�
 Context 是当前运行的内存状态，不支持进程中断后从记录恢复执行。本地产物用于复盘，不承担页面、焦点和动作恢复。
 
 Session 在正常提交后取最新 Screenshot 交给 Verification。Verification 不读取 Context 历史、TODO 或 Submission，只把断言和该截图交给视觉模型。执行与验收的记录分别保存。
+
+## 初始观察路径的框架接点
+
+零动作路径使用 ProcessHistory 保存请求前原生消息，以 Hooks.after_model_request 捕获响应，
+在输出被接受或拒绝之前保存。Context.history 持有原生消息，Recorder 将 BinaryContent 替换为已保存 PNG 的截图引用。
+后续多观察过滤仍按上文规则扩展；初始观察路径尚不提供工具或计划替换。

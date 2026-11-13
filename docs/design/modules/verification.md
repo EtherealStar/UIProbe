@@ -46,3 +46,10 @@ Screenshot 包含实际 PNG 和截图编号；Session 在提交时选择最新�
 验收不消耗浏览器动作额度，模型请求不得超出执行阶段共用的截止时间。一次 evaluate 完成后不拆分断言另行调用，也不恢复执行 Agent。
 
 通过本次运行的 Recorder 保存实际断言输入、最终截图引用、模型输出和格式纠正记录到 verification.json，图片引用已有 PNG，不复制图片。记录与执行 Agent 的 history.json 分离；本地记录失败向 Session 报告，不能把产物写入失败当作视觉判断。
+
+## 已采用的运行依赖接合
+
+Python 实现将本次运行的依赖作为 evaluate 的关键字参数传入：record、request_limit、retry_limit。
+构造函数只保存已装配模型；每次 evaluate 独立创建框架 Agent，结构化输出与 ID 验证器使用框架纠正机制。
+ProcessHistory 在每次请求前保存原生消息，Hooks.after_model_request 在验证输出前保存模型响应，
+包括最终非法响应。未安装 Instrumentation capability，默认不启用在线消息导出。
