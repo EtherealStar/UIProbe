@@ -2,14 +2,26 @@
 
 import asyncio
 import struct
+from collections.abc import Callable
 
 from playwright.async_api import async_playwright
 
 from .observation import BrowserState, Screenshot
 
 
+class BrowserRejected(Exception):
+    """Correctable rejection before dispatch."""
+
+
 class Browser:
-    def __init__(self, *, viewport_width: int = 1280, viewport_height: int = 720):
+    def __init__(
+        self,
+        *,
+        viewport_width: int = 1280,
+        viewport_height: int = 720,
+        device_scale_factor: float = 1,
+    ):
+        self.scale = device_scale_factor
         self.width = viewport_width
         self.height = viewport_height
         self.playwright = None
@@ -25,7 +37,8 @@ class Browser:
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch()
             self.context = await self.browser.new_context(
-                viewport={"width": self.width, "height": self.height}
+                viewport={"width": self.width, "height": self.height},
+                device_scale_factor=self.scale,
             )
             self.page = await self.context.new_page()
             await self.page.goto(entry_url)
@@ -45,6 +58,79 @@ class Browser:
                 self.height,
             )
             return self.state
+
+    async def click(
+        self,
+        screenshot_id: str,
+        x: int,
+        y: int,
+        deadline_at: float,
+        before_dispatch: Callable[[], object],
+    ) -> dict:
+        assert self.page is not None
+        state = self.state
+        if screenshot_id != state.screenshot.screenshot_id:
+            raise BrowserRejected("Screenshot is stale")
+        if (
+            type(x) is not int
+            or type(y) is not int
+            or not (
+                0 <= x < state.screenshot.image_width
+                and 0 <= y < state.screenshot.image_height
+            )
+        ):
+            raise BrowserRejected("Coordinates outside screenshot")
+        css_x = x * state.viewport_width / state.screenshot.image_width
+        css_y = y * state.viewport_height / state.screenshot.image_height
+        async with asyncio.timeout_at(deadline_at):
+            before_dispatch()
+            await self.page.mouse.click(css_x, css_y)
+        return {"css_x": css_x, "css_y": css_y}
+
+    async def fill_value(
+        self, ref: str, deadline_at: float, before_dispatch: Callable[[], object]
+    ) -> dict:
+        assert self.page is not None
+        if not ref.strip() or ref not in self.data_values:
+            raise BrowserRejected("Unknown data reference")
+        async with asyncio.timeout_at(deadline_at):
+            editable = await self.page.evaluate("""() => {
+                const e = document.activeElement;
+                return !!e && !e.disabled && !e.readOnly &&
+                    (e.isContentEditable || e.tagName === 'TEXTAREA' ||
+                     (e.tagName === 'INPUT' && ['text','password','email','search','tel','url','number'].includes(e.type)));
+            }""")
+            if not editable:
+                raise BrowserRejected("Focused element is not editable")
+            before_dispatch()
+            await self.page.locator(":focus").fill(self.data_values[ref])
+        return {"ref": ref}
+
+    async def scroll(
+        self, delta_y: int, deadline_at: float, before_dispatch: Callable[[], object]
+    ) -> dict:
+        assert self.page is not None
+        if type(delta_y) is not int:
+            raise BrowserRejected("Scroll requires integer CSS pixels")
+        async with asyncio.timeout_at(deadline_at):
+            before_dispatch()
+            await self.page.evaluate("y => window.scrollBy(0, y)", delta_y)
+        return {"delta_y": delta_y}
+
+    async def wait(
+        self,
+        duration_ms: int,
+        deadline_at: float,
+        before_dispatch: Callable[[], object],
+    ) -> dict:
+        if type(duration_ms) is not int or not 0 < duration_ms <= 10000:
+            raise BrowserRejected("Wait must be between 1 and 10000 milliseconds")
+        if duration_ms / 1000 >= deadline_at - asyncio.get_running_loop().time():
+            raise BrowserRejected("Wait exceeds remaining time")
+        async with asyncio.timeout_at(deadline_at):
+            before_dispatch()
+            await asyncio.sleep(duration_ms / 1000)
+        return {"duration_ms": duration_ms}
 
     async def close(self) -> None:
         try:

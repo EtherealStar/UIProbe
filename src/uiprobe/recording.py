@@ -5,7 +5,12 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    UserPromptPart,
+)
 
 from .case_input import TestCase
 from .observation import Screenshot
@@ -48,6 +53,19 @@ class SessionRecord:
         }
 
     def save_messages(self, role: str, messages, screenshot: Screenshot | None) -> None:
+        image_ids = iter(
+            [
+                item.identifier
+                if item.identifier.startswith("screen-")
+                else (screenshot.screenshot_id if screenshot else None)
+                for message in messages
+                if isinstance(message, ModelRequest)
+                for part in message.parts
+                if isinstance(part, UserPromptPart) and isinstance(part.content, list)
+                for item in part.content
+                if isinstance(item, BinaryContent)
+            ]
+        )
         payload = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
 
         def references(value):
@@ -55,9 +73,9 @@ class SessionRecord:
                 if value.get("kind") == "binary":
                     return {
                         "kind": "screenshot",
-                        "screenshot_id": screenshot.screenshot_id
-                        if screenshot
-                        else None,
+                        "screenshot_id": next(
+                            image_ids, screenshot.screenshot_id if screenshot else None
+                        ),
                     }
                 return {k: references(v) for k, v in value.items()}
             if isinstance(value, list):

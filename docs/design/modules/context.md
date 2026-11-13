@@ -55,4 +55,4 @@ Session 在正常提交后取最新 Screenshot 交给 Verification。Verificatio
 
 零动作路径使用 ProcessHistory 保存请求前原生消息，以 Hooks.after_model_request 捕获响应，
 在输出被接受或拒绝之前保存。Context.history 持有原生消息，Recorder 将 BinaryContent 替换为已保存 PNG 的截图引用。
-后续多观察过滤仍按上文规则扩展；初始观察路径尚不提供工具或计划替换。
+动作路径已提供计划整表替换及最新观察更新；多轮完整历史重建仍由后续批次验证。

@@ -14,6 +14,8 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
 
+from .actions import ActionToolset, Dependencies, RunBudget, TodoItem, tools
+from .browser import Browser
 from .case_input import TestCase
 from .observation import BrowserState, Submission
 from .recording import SessionRecord
@@ -29,6 +31,8 @@ class Context:
     test_case: TestCase
     ref_names: list[str]
     browser_state: BrowserState
+    todo: list[TodoItem] = field(default_factory=list)
+    plan_created: bool = False
     history: list[ModelMessage] = field(default_factory=list)
 
 
@@ -44,13 +48,35 @@ class ExecutionAgent:
         deadline_at: float,
         request_limit: int,
         retry_limit: int,
+        browser: Browser,
+        budget: RunBudget,
+        tool_call_limit: int,
     ) -> Submission:
         async def capture(messages: list[ModelMessage]) -> list[ModelMessage]:
             context.history = list(messages)
             record.save_messages(
                 "execution", messages, context.browser_state.screenshot
             )
-            return messages
+            from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+            state = context.browser_state
+            return [
+                *messages,
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            [
+                                f"Current screenshot: {state.screenshot.screenshot_id}; image {state.screenshot.image_width}x{state.screenshot.image_height}; viewport {state.viewport_width}x{state.viewport_height}",
+                                BinaryContent(
+                                    data=state.screenshot.png,
+                                    media_type="image/png",
+                                    identifier=state.screenshot.screenshot_id,
+                                ),
+                            ]
+                        )
+                    ]
+                ),
+            ]
 
         async def after_response(ctx, *, request_context, response):
             messages = [*request_context.messages, response]
@@ -62,7 +88,9 @@ class ExecutionAgent:
 
         agent = FrameworkAgent(
             self.model,
+            deps_type=Dependencies,
             retries=retry_limit,
+            toolsets=[ActionToolset(tools)],
             capabilities=[
                 ProcessHistory(capture),
                 Hooks(after_model_request=after_response),
@@ -84,13 +112,11 @@ class ExecutionAgent:
         try:
             async with asyncio.timeout_at(deadline_at):
                 result = await agent.run(
-                    [
-                        prompt,
-                        BinaryContent(
-                            data=state.screenshot.png, media_type="image/png"
-                        ),
-                    ],
-                    usage_limits=UsageLimits(request_limit=request_limit),
+                    prompt,
+                    deps=Dependencies(context, browser, budget, record),
+                    usage_limits=UsageLimits(
+                        request_limit=request_limit, tool_calls_limit=tool_call_limit
+                    ),
                 )
             context.history = result.all_messages()
             return Submission(result.output)

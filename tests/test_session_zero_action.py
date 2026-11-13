@@ -22,7 +22,9 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
         def respond(request):
             body = json.loads(request.content)
             requests.append(body)
-            if body.get("tools"):
+            if any(
+                t["function"]["name"] == "final_result" for t in body.get("tools", [])
+            ):
                 message = {
                     "role": "assistant",
                     "tool_calls": [

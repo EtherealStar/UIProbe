@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from .actions import RunBudget
 from .agent import Context
 from .browser import Browser
 from .case_input import InputError, TestCase, prepare
@@ -82,6 +83,11 @@ class Session:
         else:
             result.test_case = prepared.test_case
             browser = None
+            context = None
+            budget = RunBudget(
+                deadline if deadline is not None else started,
+                prepared.config.max_actions,
+            )
             if record is not None and not result.errors:
                 phase = "initialization"
                 try:
@@ -104,6 +110,9 @@ class Session:
                         assert self.agent is not None and self.verification is not None
                         result.submission = await self.agent.execute(
                             context,
+                            browser=browser,
+                            budget=budget,
+                            tool_call_limit=prepared.config.tool_call_limit,
                             record=record,
                             deadline_at=deadline,
                             request_limit=prepared.config.execution_request_limit,
@@ -144,6 +153,11 @@ class Session:
                         )
                     )
                 finally:
+                    result.action_count = budget.action_count
+                    if context is not None:
+                        result.last_screenshot_id = (
+                            context.browser_state.screenshot.screenshot_id
+                        )
                     if browser is not None:
                         try:
                             async with asyncio.timeout(5):

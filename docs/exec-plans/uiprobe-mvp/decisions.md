@@ -80,3 +80,7 @@ Evidence：锁定 Pydantic AI 2.68.0 使用 ProcessHistory capability 和 Hooks.
 
 Consequences：首图先保存 PNG 后写事件，完整消息将图片转为引用，验收记录独立。
 多轮图片过滤保留给 08；工具、动作预算与登录保留给后续批次。无真实模型验收声明。
+
+## 2026-11-13：浏览器动作派发接合
+
+采用 before_dispatch 小型回调，Browser 自身预检通过后调用 RunBudget.claim_browser_action，再实际派发；不注入整个 Session。WrapperToolset.call_tool 包含操作、单次截图、记录及 Context 更新。真实框架同响应 TODO／click／旧图 click 测试证明串行屏障覆盖包装层。wait 单次上限选择 10000 毫秒，剩余时间不足时预检拒绝。

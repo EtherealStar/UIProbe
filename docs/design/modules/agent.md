@@ -35,3 +35,7 @@ Submission 只包含正常最终输出文本，表示执行结束，不表示断
 正常最终文本直接形成 Submission，不要求额外 submit 工具。TODO 未完成不影响提交。执行 Agent 不注册 verify，Session 在收到 Submission 后启动一次独立验收；验收结果不送回执行 Agent。
 
 额度或时间耗尽而没有正常最终输出时，不构造虚假 Submission。连接、页面操作后故障和记录错误向 Session 传播。外部取消经过 Session 收尾后继续传播。Context 只支持当前运行，不从本地产物恢复中断的 Agent。
+
+## 当前运行依赖
+
+execute 的关键字依赖为 browser、budget、record、deadline_at、request_limit、retry_limit 和 tool_call_limit；Context 保存 todo 与 plan_created。五个原生工具由 FunctionToolset 注册、ActionToolset 包装。浏览器工具 sequential 屏障覆盖包装层中的派发、截图、保存与观察更新；TODO 使用非串行声明并遵守框架屏障。
