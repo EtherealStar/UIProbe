@@ -1,0 +1,16 @@
+{
+  "execution": {
+    "goal": "使用演示账号登录并进入首页",
+    "instructions": [
+      "创建操作计划，点击账号输入框并用 username 引用填写",
+      "点击密码输入框并用 password 引用填写",
+      "点击登录，观察首页后提交"
+    ]
+  },
+  "assertions": [
+    {
+      "id": "home_visible",
+      "expected": "页面显示首页，并显示登录成功、欢迎 admin 的信息"
+    }
+  ]
+}

@@ -97,3 +97,14 @@ M1、M2 均已完成；合法输入经过真实浏览器初图、框架提交和
 - 收尾事件与结果保存在线程中处理独立结果快照，Session 最多等待五秒；阻塞保存回归验证有界返回且后台完成不能修改返回对象。内核文件 I/O 可能稍后完成，超时结果不声明 result.json 已保存。M4 已完成，M5 未开始。
 - Ruff check、format --check、Pyright 与 git diff --check 均通过。
 - 最终保存等待期间的取消先尝试完成已有写入，再保存取消结果并传播；回归验证 Verdict 保持 passed，而保存结果为 cancelled/error。
+
+## M5 入口与离线验证（2026-11-13）
+
+- 提供 python -m uiprobe 的 --case／--config 参数、SessionResult JSON 和 0／1／2 退出码；应用持有并关闭模型连接，Session 借用客户端。缺少模型配置不启动浏览器，取消保持传播。
+- 新增登录、初图零动作标准用例及演示运行配置，README 补齐 Chromium 安装、页面启动、模型配置与运行命令。
+- test_mvp_e2e.py 经同一应用装配入口、真实 Chromium 与 SDK 受控响应验证登录和 passed／failed／error；测试在关闭前观察 Home 文本，检查六张 PNG、保存结果及独立验收记录。CLI 检查 JSON 和三种退出码。
+- Ruff check、format --check 和 Pyright 通过。首次定向测试因沙箱禁止 HTTP socket 失败，获准沙箱外运行后 2 tests 通过；新增退出码测试后以最终全量结果为准。
+- 双轴审查发现登录页面状态缺少断言及 CLI 成功／失败退出码未覆盖，均已补齐。
+- 测试顺序：装配实现后补集成测试，未遵循完整 red-green；用户确认采用计划规定的应用入口测试边界。
+- 真实模型命令已尝试，返回 configuration_error、退出码 2，action_count=0、artifact_paths=[]。当前环境未提供完整模型配置，不保存或输出密钥。未运行真实登录及真实初图验收，无对应 session 产物证据，M5 保持未完成；计划目录不迁移到 completed。
+- 最终全量：uv --cache-dir /tmp/uiprobe-uv-cache run python -m unittest discover -s tests -v，50 tests，OK；真实 Chromium 无跳过，受控模型不访问真实服务。完整回归获准在沙箱外执行。help 与 git diff --check 通过。

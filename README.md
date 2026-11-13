@@ -1,7 +1,7 @@
 # UIProbe
 
 按[模块设计](docs/design/modules/README.md)实现截图驱动的单条浏览器测试。
-当前已实现底层 OpenAI SDK 连接，使用 Chat Completions 接口。
+已提供浏览器测试命令行、独立视觉验收与本地产物；模型使用 Chat Completions 接口。
 
 安装依赖，复制配置模板，再填写模型服务的地址、密钥和模型名：
 
@@ -65,3 +65,38 @@ To format code and sort imports:
 uv run ruff check --select I --fix .
 uv run ruff format .
 ```
+
+## 运行浏览器测试
+
+安装依赖与 Chromium，复制 .env.exmaple 为 .env，填写支持图片与工具调用的模型配置：
+
+~~~bash
+uv sync --locked
+uv run --locked python -m playwright install chromium
+cp .env.exmaple .env
+~~~
+
+在一个终端启动演示页：
+
+~~~bash
+uv run --locked python -m http.server 8765 --bind 127.0.0.1 --directory login-demo
+~~~
+
+在另一个终端从仓库根目录执行：
+
+~~~bash
+uv run --locked python -m uiprobe --help
+uv run --locked python -m uiprobe --case login-demo/mvp-case.json --config login-demo/mvp-config.json
+uv run --locked python -m uiprobe --case login-demo/mvp-initial-case.json --config login-demo/mvp-config.json
+~~~
+
+登录用例使用 username／password 数据引用。初图用例直接提交，预期 action_count=0。旧 test-cases.json 不用于该入口。
+运行配置包含页面、引用值、预算、时限和输出目录；执行与验收共用连接，历史独立。
+标准输出为 SessionResult JSON；passed／failed／error 对应退出码 0／1／2。
+缺少模型配置时返回安全错误且不启动浏览器；外部取消经清理后传播。
+每次运行在 .scratch/uiprobe-mvp/runs 下创建独立目录，保存 events.jsonl、history.json、verification.json、screenshots/ 和 result.json。artifact_paths 列出可用产物，断言关联最终截图。
+真实模型验收状态见 [执行进度](docs/exec-plans/uiprobe-mvp/progress.md)。离线回归不调用真实模型：
+
+~~~bash
+uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
+~~~

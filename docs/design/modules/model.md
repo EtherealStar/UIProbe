@@ -32,3 +32,8 @@ complete() 是现有底层单次请求入口，返回 SDK 响应并传播 SDK �
 ## 记录约束
 
 连接层不保存对话历史。Recorder 分别保存执行历史和验收材料；在线 Langfuse 或 OpenTelemetry 只导出标识、摘要、耗时和状态，不携带原始消息、图片、实际输入值或密钥。模型配置不写入会话 JSON 或普通事件日志。
+
+## 命令行应用入口
+
+python -m uiprobe --case <用例路径> --config <运行配置路径> 读取文件和模型连接配置，创建 ModelService 并在退出时关闭客户端。run_application 借用该服务装配执行与验收，不接管连接生命周期。
+标准输出为 SessionResult JSON；passed、failed、error 分别返回 0、1、2。文件读取或模型配置启动错误返回安全内存结果，无产物路径且不启动 Browser。外部取消经 Session 收尾后继续传播。

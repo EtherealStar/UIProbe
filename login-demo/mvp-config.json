@@ -1,0 +1,15 @@
+{
+  "entry_url": "http://127.0.0.1:8765/login.html",
+  "data_values": {
+    "username": "admin",
+    "password": "123456"
+  },
+  "max_actions": 20,
+  "execution_request_limit": 30,
+  "verification_request_limit": 4,
+  "tool_call_limit": 50,
+  "tool_retry_limit": 6,
+  "verification_retry_limit": 2,
+  "timeout_seconds": 180,
+  "output_dir": ".scratch/uiprobe-mvp/runs"
+}
