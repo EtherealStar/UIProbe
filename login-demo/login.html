@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>账号登录</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif; color: #182d36; background: #f3f6f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { width: 100%; max-width: 400px; background: #fff; padding: 36px; border: 1px solid #d5dfdc; border-radius: 12px; }
+    h1 { font-size: 28px; margin: 0 0 10px; }
+    p { color: #52636a; line-height: 1.7; margin: 0 0 28px; }
+    label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+    input { width: 100%; min-height: 46px; border: 1px solid #9caca6; border-radius: 6px; padding: 10px 12px; font: inherit; color: inherit; background: #fff; caret-color: #176449; }
+    .field { margin-bottom: 20px; }
+    button { width: 100%; min-height: 46px; border: 0; border-radius: 6px; padding: 10px 16px; background: #176449; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { background: #104b36; }
+    :focus-visible { outline: 3px solid #277a60; outline-offset: 3px; }
+    input[aria-invalid="true"] { border-color: #af2929; }
+    .message { color: #af2929; min-height: 24px; font-size: 14px; margin: 0 0 12px; }
+    .hint { margin: 24px 0 0; font-size: 13px; }
+    code { color: #182d36; }
+    [hidden] { display: none !important; }
+    ::selection { background: #cae8db; color: #182d36; }
+    @media (max-width: 420px) { main { padding: 28px 24px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="login-page" aria-labelledby="login-heading">
+      <h1 id="login-heading" tabindex="-1">账号登录</h1>
+      <p>输入账号和密码，进入首页。</p>
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label for="username">账号</label>
+          <input id="username" name="username" autocomplete="username" required aria-describedby="message" spellcheck="false" autocapitalize="none">
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="message">
+        </div>
+        <p id="message" class="message" role="alert" aria-live="polite"></p>
+        <button type="submit">登录</button>
+      </form>
+      <p class="hint">演示账号：<code>admin</code><br>演示密码：<code>123456</code><br>此页面仅用于前端登录测试。</p>
+    </section>
+    <section id="home-page" hidden aria-labelledby="home-heading">
+      <h1 id="home-heading" tabindex="-1">首页</h1>
+      <p>登录成功，欢迎你，admin！</p>
+      <button id="logout" type="button">退出登录</button>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('login-form');
+    const username = document.getElementById('username');
+    const password = document.getElementById('password');
+    const message = document.getElementById('message');
+    const loginPage = document.getElementById('login-page');
+    const homePage = document.getElementById('home-page');
+    let loggedIn = false;
+
+    function clearError() {
+      message.textContent = '';
+      username.removeAttribute('aria-invalid');
+      password.removeAttribute('aria-invalid');
+    }
+
+    function renderPage() {
+      const showHome = loggedIn && location.hash === '#home';
+      loginPage.hidden = showHome;
+      homePage.hidden = !showHome;
+      document.title = showHome ? '首页' : '账号登录';
+      if (showHome) document.getElementById('home-heading').focus();
+    }
+
+    form.addEventListener('input', clearError);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      clearError();
+      if (!username.value.trim() || !password.value) {
+        message.textContent = '请输入账号和密码';
+        if (!username.value.trim()) username.setAttribute('aria-invalid', 'true');
+        if (!password.value) password.setAttribute('aria-invalid', 'true');
+        (!username.value.trim() ? username : password).focus();
+        return;
+      }
+      if (username.value !== 'admin' || password.value !== '123456') {
+        message.textContent = '账号或密码错误，请重新输入';
+        username.setAttribute('aria-invalid', 'true');
+        password.setAttribute('aria-invalid', 'true');
+        password.focus();
+        return;
+      }
+      loggedIn = true;
+      password.value = '';
+      location.hash = 'home';
+      renderPage();
+    });
+
+    document.getElementById('logout').addEventListener('click', () => {
+      loggedIn = false;
+      form.reset();
+      clearError();
+      location.hash = 'login';
+      renderPage();
+      username.focus();
+    });
+    window.addEventListener('hashchange', renderPage);
+    renderPage();
+  </script>
+</body>
+</html>

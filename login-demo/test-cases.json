@@ -1,0 +1,44 @@
+[
+  {
+    "title": "正确账号和密码登录成功",
+    "priority": "P0",
+    "case_type": "functional",
+    "is_smoke": true,
+    "precondition": "使用浏览器打开 login.html，当前处于登录页面；演示账号为 admin，密码为 123456",
+    "steps": [
+      "打开 login.html 登录页面",
+      "在账号输入框中输入正确账号 admin",
+      "在密码输入框中输入正确密码 123456",
+      "点击登录按钮"
+    ],
+    "expected_result": "登录成功，地址末尾变为 #home，显示首页和“登录成功，欢迎你，admin！”，登录表单隐藏"
+  },
+  {
+    "title": "正确账号和错误密码登录失败",
+    "priority": "P0",
+    "case_type": "functional",
+    "is_smoke": true,
+    "precondition": "使用浏览器打开 login.html，当前处于登录页面；演示账号为 admin，正确密码为 123456",
+    "steps": [
+      "打开 login.html 登录页面",
+      "在账号输入框中输入正确账号 admin",
+      "在密码输入框中输入错误密码 654321，正确密码为 123456",
+      "点击登录按钮"
+    ],
+    "expected_result": "登录失败，停留在登录页面，显示“账号或密码错误，请重新输入”，不显示首页"
+  },
+  {
+    "title": "账号和密码为空时禁止登录",
+    "priority": "P1",
+    "case_type": "functional",
+    "is_smoke": false,
+    "precondition": "使用浏览器打开 login.html，当前处于登录页面；演示账号为 admin，正确密码为 123456",
+    "steps": [
+      "打开 login.html 登录页面",
+      "清空账号输入框，不输入账号；有效账号为 admin",
+      "清空密码输入框，不输入密码；正确密码为 123456",
+      "点击登录按钮"
+    ],
+    "expected_result": "登录失败，停留在登录页面，显示“请输入账号和密码”，账号输入框获得焦点，不显示首页"
+  }
+]
