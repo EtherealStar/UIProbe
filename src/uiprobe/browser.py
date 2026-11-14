@@ -7,6 +7,7 @@ from collections.abc import Callable
 from playwright.async_api import async_playwright
 
 from .error_handling import locate
+from .observability import fact, traced
 from .observation import BrowserState, Screenshot
 
 
@@ -30,6 +31,7 @@ class Browser:
         self.page = None
         self.sequence = 0
 
+    @traced("browser.open")
     async def open(
         self, entry_url: str, data_values: dict[str, str], deadline_at: float
     ) -> BrowserState:
@@ -60,7 +62,12 @@ class Browser:
                 "navigation_failed",
                 "Cannot navigate to entry URL",
             ):
-                await self.page.goto(entry_url)
+                response = await self.page.goto(entry_url)
+                fact(
+                    "navigation",
+                    url=self.page.url,
+                    http_status=response.status if response else 0,
+                )
             self.initialization_operation = "capture_initial"
             with locate(
                 "initialization",
@@ -70,6 +77,7 @@ class Browser:
             ):
                 return await self.capture(deadline_at)
 
+    @traced("browser.capture")
     async def capture(self, deadline_at: float) -> BrowserState:
         assert self.page is not None
         if asyncio.get_running_loop().time() >= deadline_at:
@@ -84,6 +92,14 @@ class Browser:
                 Screenshot(f"screen-{self.sequence}", png, width, height),
                 self.width,
                 self.height,
+            )
+            fact(
+                "screenshot",
+                screenshot_id=self.state.screenshot.screenshot_id,
+                image_width=width,
+                image_height=height,
+                viewport_width=self.width,
+                viewport_height=self.height,
             )
             return self.state
 
@@ -160,6 +176,7 @@ class Browser:
             await asyncio.sleep(duration_ms / 1000)
         return {"duration_ms": duration_ms}
 
+    @traced("browser.close")
     async def close(self) -> None:
         try:
             if self.browser is not None:

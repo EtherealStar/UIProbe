@@ -10,6 +10,9 @@ from unittest.mock import patch
 
 import httpx2 as httpx
 
+from trace_fixtures import CapturingExporter
+from uiprobe.observability import run_trace
+
 from uiprobe.__main__ import main, run_application
 from uiprobe.browser import Browser
 from uiprobe.model_service import ModelService, ModelServiceConfig
@@ -172,10 +175,13 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                                     await super().close()
 
                             browser = ObservedBrowser()
-                            with patch("uiprobe.session.Browser", return_value=browser):
-                                result = await run_application(
-                                    json.dumps(case), cfg, service
-                                )
+                            exporter = CapturingExporter()
+                            with run_trace(exporter), patch("uiprobe.session.Browser", return_value=browser):
+                                exporter = CapturingExporter()
+                                with run_trace(exporter):
+                                    result = await run_application(
+                                        json.dumps(case), cfg, service
+                                    )
                             self.assertEqual(browser.final_text, "Home")
                             self.assertEqual(result.status, status, result.errors)
                             self.assertEqual(result.action_count, 5)
@@ -189,6 +195,24 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                                 len(list((run / "screenshots").glob("*.png"))), 6
                             )
                             self.assertTrue((run / "verification.json").exists())
+                            trace = json.loads((run / "trace.json").read_text())
+                            payload = b"".join(exporter.payloads)
+                            self.assertNotIn(b"data:image", payload)
+                            self.assertNotIn(b"iVBORw0KGgo", payload)
+                            self.assertIn(b"browser_dispatch", payload)
+                            self.assertIn(b"css_x", payload)
+                            self.assertIn(b"replace_todo", payload)
+                            self.assertEqual(
+                                len(
+                                    [
+                                        s
+                                        for s in trace["spans"]
+                                        if s["attributes"].get("gen_ai.operation.name")
+                                        == "chat"
+                                    ]
+                                ),
+                                len(requests),
+                            )
                             if status == "passed":
                                 self.assertNotIn("Login", repr(requests[-1]))
             finally:

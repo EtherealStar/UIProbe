@@ -1,8 +1,11 @@
 """Native tools and the shared browser dispatch boundary."""
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
+
+from pydantic_core import to_jsonable_python
 
 if TYPE_CHECKING:
     from .agent import Context
@@ -12,6 +15,7 @@ from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 
 from .browser import Browser, BrowserRejected
 from .case_input import StrictValue
+from .observability import fact
 from .recording import SessionRecord
 
 
@@ -39,6 +43,11 @@ class RunBudget:
         if self.action_count >= self.max_actions:
             raise ModelRetry("Browser action budget exhausted")
         self.action_count += 1
+        fact(
+            "browser_dispatch",
+            action_index=self.action_count,
+            remaining_seconds=self.deadline_at - asyncio.get_running_loop().time(),
+        )
         return self.action_count
 
 
@@ -125,7 +134,18 @@ class ActionToolset(WrapperToolset[Dependencies]):
         d = ctx.deps
         started = asyncio.get_running_loop().time()
         input_id = d.context.browser_state.screenshot.screenshot_id
-        event = {"call_id": ctx.tool_call_id, "tool": name}
+        event = {
+            "call_id": ctx.tool_call_id,
+            "tool": name,
+            "arguments": to_jsonable_python(tool_args),
+        }
+        fact(
+            "tool_started",
+            call_id=ctx.tool_call_id or "",
+            tool=name,
+            arguments=json.dumps(to_jsonable_python(tool_args)),
+            input_screenshot_id=input_id,
+        )
         d.record.append({"type": "tool_started", **event})
         try:
             if asyncio.get_running_loop().time() >= d.budget.deadline_at:
@@ -166,5 +186,10 @@ class ActionToolset(WrapperToolset[Dependencies]):
             raise
         d.record.append(
             {"type": "tool_finished", "status": "completed", **event, **result}
+        )
+        fact(
+            "tool_result",
+            call_id=ctx.tool_call_id or "",
+            result=json.dumps(result),
         )
         return result

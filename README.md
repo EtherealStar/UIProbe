@@ -100,3 +100,5 @@ uv run --locked python -m uiprobe --case login-demo/mvp-initial-case.json --conf
 ~~~bash
 uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
 ~~~
+
+运行追踪默认保存到同一产物目录的 trace.json；每次实际模型发送视图保存到 execution-requests.jsonl 和 verification-requests.jsonl。图片引用 screenshots/ 中的 PNG，在线不上传图片。配置 LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY 可启用 Langfuse OTLP 导出；在线不可用不会改变验收判断。退出提交等待最多 2.5 秒，flush 完成不表示远端逐条确认。

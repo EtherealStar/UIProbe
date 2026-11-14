@@ -10,11 +10,13 @@ from uuid import uuid4
 from .agent import ExecutionAgent, model_from_client
 from .error_handling import describe
 from .model_service import ModelService, ModelServiceConfig
+from .observability import traced
 from .recording import Recorder
 from .session import Session, SessionResult
 from .verification import Verification
 
 
+@traced("application_session")
 async def run_application(
     test_json: str, config: object, service: ModelService
 ) -> SessionResult:
@@ -26,6 +28,7 @@ async def run_application(
     ).run(test_json, config)
 
 
+@traced("startup")
 async def run_files(
     case_path: Path, config_path: Path
 ) -> SessionResult:
@@ -50,8 +53,15 @@ async def run_files(
             "configure_model",
             config,
         )
-    async with service:
+    try:
         return await run_application(test_json, config, service)
+    finally:
+        await close_service(service)
+
+
+@traced("model_client.close")
+async def close_service(service):
+    await service.client.close()
 
 
 async def startup_error(
@@ -65,6 +75,9 @@ async def startup_error(
     if isinstance(output_dir, str) and output_dir.strip() and chr(0) not in output_dir:
         try:
             record = Recorder().begin(result.session_id, output_dir)
+            from .observability import bind_record
+
+            bind_record(record)
         except OSError as recording_exc:
             summary, _ = describe(
                 recording_exc,

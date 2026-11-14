@@ -12,6 +12,7 @@ from .agent import Context
 from .browser import Browser
 from .case_input import InputError, TestCase, prepare
 from .error_handling import SessionError, describe, locate
+from .observability import bind_record, fact, traced
 from .observation import Submission, Verdict
 from .recording import Recorder
 
@@ -39,6 +40,7 @@ class Session:
         self.agent = agent
         self.verification = verification
 
+    @traced("session")
     async def run(self, test_json: str, config: object) -> SessionResult:
         started = time.monotonic()
         result = SessionResult(uuid4().hex)
@@ -66,6 +68,7 @@ class Session:
         ):
             try:
                 record = self.recorder.begin(result.session_id, output_dir)
+                bind_record(record)
             except OSError as exc:
                 error, diagnostic = describe(
                     exc,
@@ -266,6 +269,7 @@ class Session:
     def _finish_record(record, result, started_record, diagnostics=()):
         try:
             for diagnostic in diagnostics:
+                fact("diagnostic", **diagnostic)
                 record.save_diagnostic(diagnostic)
         except OSError as exc:
             error, _ = describe(

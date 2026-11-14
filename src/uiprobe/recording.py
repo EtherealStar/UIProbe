@@ -18,6 +18,7 @@ from .observation import Screenshot
 
 class SessionRecord:
     def __init__(self, session_id: str, directory: Path):
+        self.trace_id: str | None = None
         self.session_id = session_id
         self.directory = directory
 
@@ -33,10 +34,41 @@ class SessionRecord:
         payload = {
             **event,
             "session_id": self.session_id,
+            "trace_id": getattr(self, "trace_id", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         with (self.directory / "events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=False) + chr(10))
+
+    def save_trace(self, spans, warnings):
+        (self.directory / "trace.json").write_text(
+            json.dumps(
+                {"trace_id": self.trace_id, "spans": spans, "warnings": warnings},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def save_sent_messages(self, role, messages, screenshot):
+        # Reuse native serialization and screenshot references without replacing history.
+        payload = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
+
+        def references(value):
+            if isinstance(value, dict):
+                if value.get("kind") == "binary":
+                    return {
+                        "kind": "screenshot",
+                        "screenshot_id": screenshot.screenshot_id,
+                    }
+                return {k: references(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [references(v) for v in value]
+            return value
+
+        with (self.directory / f"{role}-requests.jsonl").open(
+            "a", encoding="utf-8"
+        ) as stream:
+            stream.write(json.dumps(references(payload), ensure_ascii=False) + "\n")
 
     def save_diagnostic(self, diagnostic: dict) -> None:
         directory = self.directory / "diagnostics"

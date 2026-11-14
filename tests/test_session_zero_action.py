@@ -9,8 +9,10 @@ from pathlib import Path
 import httpx2 as httpx
 from openai import AsyncOpenAI
 from test_session_input import case, config
+from trace_fixtures import CapturingExporter
 
 from uiprobe.agent import ExecutionAgent, model_from_client
+from uiprobe.observability import run_trace
 from uiprobe.session import Session
 from uiprobe.verification import Verification
 
@@ -98,15 +100,48 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                         f"http://127.0.0.1:{server.server_port}/index.html"
                     )
                     for _ in range(2):
-                        result = await session.run(json.dumps(case()), cfg)
+                        exporter = CapturingExporter()
+                        with run_trace(exporter):
+                            result = await session.run(json.dumps(case()), cfg)
                         self.assertEqual(result.status, "passed", result.errors)
                         self.assertEqual(result.action_count, 0)
+                        self.assertTrue(
+                            (Path(directory, result.session_id) / "trace.json").exists()
+                        )
                         self.assertIsNotNone(result.submission)
                         self.assertFalse(client.is_closed())
                         run = Path(directory, result.session_id)
                         png = (run / "screenshots/screen-1.png").read_bytes()
                         self.assertTrue(png.startswith(b"\x89PNG"))
                         self.assertEqual(int.from_bytes(png[16:20], "big"), 1280)
+                        trace = json.loads((run / "trace.json").read_text())
+                        self.assertEqual(
+                            len(
+                                {span["context"]["trace_id"] for span in trace["spans"]}
+                            ),
+                            1,
+                        )
+                        names = [span["name"] for span in trace["spans"]]
+                        self.assertIn("application", names)
+                        self.assertIn("verification", names)
+                        self.assertIn("browser.close", names)
+                        model_spans = [
+                            span
+                            for span in trace["spans"]
+                            if span["attributes"].get("gen_ai.operation.name") == "chat"
+                        ]
+                        self.assertEqual(len(model_spans), 2)
+                        self.assertIn(
+                            "Initial observation submitted", json.dumps(trace)
+                        )
+                        payload = b"".join(exporter.payloads)
+                        self.assertIn(b"Initial observation submitted", payload)
+                        self.assertNotIn(b"data:image", payload)
+                        self.assertNotIn(b"iVBORw0KGgo", payload)
+                        self.assertNotIn(png, payload)
+                        self.assertIn(
+                            "screen-1", (run / "execution-requests.jsonl").read_text()
+                        )
                         history = (run / "history.json").read_text()
                         self.assertIn("screen-1", history)
                         self.assertNotIn("secret-value", history)

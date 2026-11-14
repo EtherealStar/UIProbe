@@ -10,6 +10,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
 from .case_input import StrictValue, TestCase
+from .observability import instrumentation, traced
 from .observation import AssertionResult, Screenshot, Status, Verdict
 from .recording import SessionRecord
 
@@ -39,6 +40,7 @@ class Verification:
     def __init__(self, model: Model):
         self.model = model
 
+    @traced("verification")
     async def evaluate(
         self,
         test_case: TestCase,
@@ -61,6 +63,8 @@ class Verification:
         async def capture(messages):
             history[:] = messages
             save(messages)
+            if screenshot is not None:
+                record.save_sent_messages("verification", messages, screenshot)
             return messages
 
         async def after_response(ctx, *, request_context, response):
@@ -79,6 +83,8 @@ class Verification:
                 Hooks(after_model_request=after_response),
             ],
         )
+
+        agent.instrument = instrumentation()
 
         @agent.output_validator
         def validate(ctx: RunContext, output: Judgments) -> Judgments:

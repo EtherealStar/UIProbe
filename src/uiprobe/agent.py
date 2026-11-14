@@ -17,6 +17,7 @@ from pydantic_ai.usage import UsageLimits
 from .actions import ActionToolset, Dependencies, RunBudget, TodoItem, tools
 from .browser import Browser
 from .case_input import TestCase
+from .observability import instrumentation, traced
 from .observation import BrowserState, Submission
 from .recording import SessionRecord
 
@@ -62,6 +63,7 @@ class ExecutionAgent:
     def __init__(self, model: Model):
         self.model = model
 
+    @traced("execution")
     async def execute(
         self,
         context: Context,
@@ -110,6 +112,7 @@ class ExecutionAgent:
             record.save_messages("execution", context.history, state.screenshot)
             view = context.messages_for_model()
             view[-2 if budget.action_count >= budget.max_actions else -1] = observation
+            record.save_sent_messages("execution", view, state.screenshot)
             seen = len(view)
             return view
 
@@ -133,6 +136,8 @@ class ExecutionAgent:
             ],
             instructions="Read the test case and browser observation. Return final text when execution is complete. Submission does not establish assertion results.",
         )
+        agent.instrument = instrumentation()
+
         state = context.browser_state
         prompt = json.dumps(
             {

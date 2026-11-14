@@ -31,7 +31,7 @@
 
 ## M2：正常测试的本地与 Langfuse 全链路可查
 
-### Batch 02：零动作追踪贯通
+### Batch 02：零动作追踪贯通（已完成，2026-11-14）
 
 接合应用入口、Session、Agent、Verification 和 Recorder。首次使用锁定 Pydantic AI 原生 Instrumentation 与 Langfuse／OTel 接合，在本地 exporter 和受控在线出口观察同一次零动作会话。先验证当前 StreamingModel 对框架模型观测的影响，不照搬不同版本构造参数。
 
@@ -41,7 +41,7 @@
 
 验证入口：`test_session_zero_action.py`、`test_mvp_e2e.py`，以及新增原生追踪与待导出载荷检查。受控 exporter 与网络出口都不得依赖真实凭据。
 
-### Batch 03：正常浏览器动作追踪
+### Batch 03：正常浏览器动作追踪（已完成，2026-11-14）
 
 沿 `src/uiprobe/actions.py`、`src/uiprobe/browser.py`、Context 发送视图和 Recorder 接入正常 TODO／点击／引用填写路径，使用现有 before_dispatch 接合记录事实，不为观测新增派发循环。
 

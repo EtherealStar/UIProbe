@@ -2,8 +2,8 @@
 
 ## Current State
 
-- Status：M1 implemented；M2—M4 尚未实施。
-- Current milestone：M1 完成；下一批为 M2 / 02。用户本轮直接授权执行 M1。
+- Status：M1、M2 implemented；M3—M4 尚未实施。
+- Current milestone：M2 完成；下一批为 M3 / 04、05、06。用户本轮直接授权执行 M2。
 - Last updated：2026-11-14，Asia/Shanghai。
 - Tracker：沿用已确认的本地文件 tracker；本 feature 草案尚未发布。
 
@@ -11,9 +11,9 @@
 
 - [x] M1：初始化失败可完整定位。
   - [x] 01 初始化失败可取得具体摘要与完整本地诊断。
-- [ ] M2：正常测试的本地与 Langfuse 全链路可查。
-  - [ ] 02 零动作会话贯通本地与 Langfuse 追踪。
-  - [ ] 03 正常计划与浏览器动作全程可查。
+- [x] M2：正常测试的本地与 Langfuse 全链路可查。
+  - [x] 02 零动作会话贯通本地与 Langfuse 追踪。
+  - [x] 03 正常计划与浏览器动作全程可查。
 - [ ] M3：故障链可解释且不改变执行策略。
   - [ ] 04 工具拒绝与派发后故障可区分。
   - [ ] 05 模型与验收失败保留完整诊断及可见部分输出。
@@ -56,3 +56,13 @@ M1 已按用户授权实施并通过离线验证；M2—M4 继续按票据依赖
 新增 test_initialization_diagnostics.py：真实 Chromium 连接拒绝、异常 cause 链、CLI 有／无可用目录、初始化超时操作归因。原有输入测试适配新增目录并继续检查其中 JSON 内容。code-review 双轴审查指出的超时归因与启动保存时限问题已修复。静态 Ruff check / format --check 和 Pyright 通过。全量 unittest：57 tests，OK（24.694 秒）。测试不使用真实模型或 Langfuse。
 
 M2—M4、在线导出、真实演示及组合故障仍未完成。草案文件保留，M1 执行不等同批量发布其余票据。
+
+## M2 实施证据（2026-11-14）
+
+正常零动作与登录沿原生框架追踪，应用根覆盖启动、Session、浏览器和模型客户端关闭；本地 trace、原生完整历史、实际发送视图和 PNG 可对应。工具记录原始参数、实际结果、派发计数、输入输出截图、CSS 坐标和时间预算。导航 404 保留状态并继续取得合法 failed Verdict。
+
+零动作两次运行、登录 passed/failed/error 三种结果均保持既有行为。受控 exporter 检查实际 OTLP protobuf：完整文本存在，没有 PNG、图片 base64 或 data URI；原生 chat span 数等于实际模型请求数。真实 OTLP HTTP exporter 连接本地服务并成功提交 protobuf。BrokenExporter 不改变测试结论；阻塞 exporter 的退出等待独立限制为 2.5 秒。
+
+双轴 code-review 发现锁定 SDK 忽略 force_flush timeout 参数，已改为 daemon 线程 flush + shutdown，主线程 join 2.5 秒；修复资源关闭和 ContextVar finally 重置。最终本地追踪写入失败保留内存结果并标记 recording 错误，已保存结果快照可能早于应用收尾，完整组合语义继续由 07 验证。
+
+Ruff check、format --check、Pyright 通过；全量 unittest 60 tests OK（29.616 秒，后续最终复跑见提交时报告）。本地真实 Chromium、受控模型和受控 OTLP 出口，无真实模型或个人 Langfuse 调用。新增 test_observability.py 覆盖 404、在线异常、阻塞退出、真实 OTLP HTTP；扩充既有零动作和应用登录回归。完整失败状态字段、流中断和跨阶段组合故障仍属 M3/M4。
