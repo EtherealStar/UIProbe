@@ -11,15 +11,9 @@ from .actions import RunBudget
 from .agent import Context
 from .browser import Browser
 from .case_input import InputError, TestCase, prepare
+from .error_handling import SessionError, describe, locate
 from .observation import Submission, Verdict
 from .recording import Recorder
-
-
-@dataclass(frozen=True)
-class SessionError:
-    phase: str
-    code: str
-    message: str
 
 
 @dataclass
@@ -48,6 +42,7 @@ class Session:
     async def run(self, test_json: str, config: object) -> SessionResult:
         started = time.monotonic()
         result = SessionResult(uuid4().hex)
+        diagnostics = []
         record = None
         cancelled = False
         started_record = False
@@ -71,10 +66,16 @@ class Session:
         ):
             try:
                 record = self.recorder.begin(result.session_id, output_dir)
-            except OSError:
-                result.errors.append(
-                    SessionError("recording", "begin_failed", "Cannot create record")
+            except OSError as exc:
+                error, diagnostic = describe(
+                    exc,
+                    "recording",
+                    "create_record",
+                    "begin_failed",
+                    "Cannot create record",
                 )
+                result.errors.append(error)
+                diagnostics.append(diagnostic)
         prepared = prepare(test_json, config)
         if isinstance(prepared, InputError):
             result.errors.extend(
@@ -94,7 +95,13 @@ class Session:
                 try:
                     assert deadline is not None
                     async with asyncio.timeout_at(deadline):
-                        record.append({"type": "session_started"})
+                        with locate(
+                            "recording",
+                            "append_events",
+                            "append_failed",
+                            "Cannot append record",
+                        ):
+                            record.append({"type": "session_started"})
                         started_record = True
                         if time.monotonic() >= deadline:
                             raise TimeoutError
@@ -105,7 +112,13 @@ class Session:
                             deadline,
                         )
                         result.last_screenshot_id = state.screenshot.screenshot_id
-                        record.save_screenshot(state.screenshot)
+                        with locate(
+                            "recording",
+                            "save_initial_screenshot",
+                            "screenshot_save_failed",
+                            "Cannot save initial screenshot",
+                        ):
+                            record.save_screenshot(state.screenshot)
                         context = Context(
                             prepared.test_case, list(prepared.config.data_values), state
                         )
@@ -149,16 +162,27 @@ class Session:
                     )
                 except Exception as exc:
                     result.stop_reason = phase + "_error"
-                    result.errors.append(
-                        SessionError(
-                            "recording"
-                            if isinstance(exc, OSError)
-                            and not isinstance(exc, TimeoutError)
-                            else phase,
-                            "run_failed",
-                            "Session phase failed",
-                        )
+                    error, diagnostic = describe(
+                        exc,
+                        phase,
+                        {
+                            "initialization": (
+                                getattr(
+                                    browser,
+                                    "initialization_operation",
+                                    "launch_browser",
+                                )
+                                if isinstance(browser, Browser)
+                                else "open_browser"
+                            ),
+                            "execution": "execute_agent",
+                            "verification": "evaluate_assertions",
+                        }[phase],
+                        "run_failed",
+                        "Session operation failed",
                     )
+                    result.errors.append(error)
+                    diagnostics.append(diagnostic)
                 finally:
                     result.action_count = budget.action_count
                     if context is not None:
@@ -185,10 +209,22 @@ class Session:
             result.errors.append(
                 SessionError("input", "timeout", "Input preparation exceeded deadline")
             )
+        for error in result.errors:
+            if not any(d["error_id"] == error.error_id for d in diagnostics):
+                diagnostics.append(
+                    {
+                        **error.__dict__,
+                        "exception_type": None,
+                        "exception_message": None,
+                        "traceback": None,
+                    }
+                )
         if record is not None:
             snapshot = deepcopy(result)
             saving = asyncio.create_task(
-                asyncio.to_thread(self._finish_record, record, snapshot, started_record)
+                asyncio.to_thread(
+                    self._finish_record, record, snapshot, started_record, diagnostics
+                )
             )
             try:
                 async with asyncio.timeout(5):
@@ -204,7 +240,11 @@ class Session:
                     async with asyncio.timeout(5):
                         await asyncio.shield(saving)
                         result = await asyncio.to_thread(
-                            self._finish_record, record, deepcopy(result), True
+                            self._finish_record,
+                            record,
+                            deepcopy(result),
+                            True,
+                            diagnostics,
                         )
                 except (TimeoutError, asyncio.CancelledError):
                     pass
@@ -223,7 +263,20 @@ class Session:
         return result
 
     @staticmethod
-    def _finish_record(record, result, started_record):
+    def _finish_record(record, result, started_record, diagnostics=()):
+        try:
+            for diagnostic in diagnostics:
+                record.save_diagnostic(diagnostic)
+        except OSError as exc:
+            error, _ = describe(
+                exc,
+                "recording",
+                "save_diagnostic",
+                "diagnostic_save_failed",
+                "Cannot save diagnostic",
+            )
+            result.errors.append(error)
+            result.status = "error"
         try:
             if not started_record:
                 record.append({"type": "session_started"})

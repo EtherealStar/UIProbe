@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from playwright.async_api import async_playwright
 
+from .error_handling import locate
 from .observation import BrowserState, Screenshot
 
 
@@ -36,15 +37,38 @@ class Browser:
             raise TimeoutError
         self.data_values = dict(data_values)
         async with asyncio.timeout_at(deadline_at):
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch()
-            self.context = await self.browser.new_context(
-                viewport={"width": self.width, "height": self.height},
-                device_scale_factor=self.scale,
-            )
-            self.page = await self.context.new_page()
-            await self.page.goto(entry_url)
-            return await self.capture(deadline_at)
+            self.initialization_operation = "launch_browser"
+            with locate(
+                "initialization",
+                "launch_browser",
+                "browser_start_failed",
+                "Cannot start browser",
+            ):
+                self.playwright = await async_playwright().start()
+                self.browser = await self.playwright.chromium.launch(
+                    headless=self.headless
+                )
+                self.context = await self.browser.new_context(
+                    viewport={"width": self.width, "height": self.height},
+                    device_scale_factor=self.scale,
+                )
+                self.page = await self.context.new_page()
+            self.initialization_operation = "navigate"
+            with locate(
+                "initialization",
+                "navigate",
+                "navigation_failed",
+                "Cannot navigate to entry URL",
+            ):
+                await self.page.goto(entry_url)
+            self.initialization_operation = "capture_initial"
+            with locate(
+                "initialization",
+                "capture_initial",
+                "capture_failed",
+                "Cannot capture initial screenshot",
+            ):
+                return await self.capture(deadline_at)
 
     async def capture(self, deadline_at: float) -> BrowserState:
         assert self.page is not None

@@ -38,6 +38,13 @@ class SessionRecord:
         with (self.directory / "events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=False) + chr(10))
 
+    def save_diagnostic(self, diagnostic: dict) -> None:
+        directory = self.directory / "diagnostics"
+        directory.mkdir(exist_ok=True)
+        (directory / f"{diagnostic['error_id']}.json").write_text(
+            json.dumps(diagnostic, ensure_ascii=False), encoding="utf-8"
+        )
+
     def save_screenshot(self, screenshot: Screenshot) -> None:
         directory = self.directory / "screenshots"
         directory.mkdir(exist_ok=True)

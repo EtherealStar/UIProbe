@@ -139,3 +139,5 @@ stop_reason 保留主流程停止原因；errors 记录阶段、类别和安全�
 每次运行独占 output_dir/session_id，目录存在时报错，不覆盖。SessionEvent 使用实际日期时间、session_id 和事件类型；工具事件以 call_id 配对，页面动作另带 action_index 和截图关联。并发按实际开始与完成记录。
 
 先保存 PNG 再写引用事件。history.json 保存执行历史，verification.json 单独保存验收输入、输出和纠正，图片引用 screenshots 内已有 PNG；result.json 保存最终结果。本地不恢复执行。摘要与错误不回显实际输入值，在线遥测不含正文或图片；实际页面截图不承诺自动脱敏。
+
+M1 的错误标识、诊断布局与首批错误码见 [错误处理契约](modules/error-handling.md#m1-已采用的本地诊断契约2026-11-14)。诊断保存于 diagnostics/<error_id>.json，由 Recorder 写入。

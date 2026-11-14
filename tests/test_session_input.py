@@ -133,7 +133,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             verifier.assert_not_called()
             for path in first.artifact_paths:
                 self.assertTrue(Path(path).exists())
-                self.assertNotIn("secret-value", Path(path).read_text())
+                files = (
+                    Path(path).rglob("*.json") if Path(path).is_dir() else [Path(path)]
+                )
+                for artifact in files:
+                    self.assertNotIn("secret-value", artifact.read_text())
             saved = json.loads(
                 (Path(directory) / first.session_id / "result.json").read_text()
             )
