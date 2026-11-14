@@ -69,3 +69,9 @@ Session 的合法执行路径在 M2 接入，当前明确返回 execution_unavai
 ### 收尾记录等待
 
 最终事件和结果写入使用独立线程处理 SessionResult 快照，Session 等待上限为五秒。等待超时返回 recording/finalization_timeout；不声明结果文件已经保存，仅返回已成功创建的会话目录。线程不执行浏览器或模型操作，也不能修改返回结果。操作系统中已经开始的文件写入可能稍后完成；此时限约束 Session 等待，不承诺中断内核文件 I/O。
+
+## 跨阶段故障的保留
+
+记录对象暂存故障处置期间再次发生的记录错误，Session 收尾时合并摘要与诊断；原始异常继续传播，主 stop_reason 不变。浏览器清理失败保存原始异常链。应用客户端关闭另限五秒，失败追加 cleanup/close_model_client 错误，保留已有 Submission、Verdict、动作数和主停止原因。
+
+客户端关闭发生在 Session 保存之后：应用通过当前绑定的 Recorder 更新结果与诊断，等待上限五秒。更新失败时返回内存结果，并从 artifact_paths 移除旧 result.json，旧文件仅为关闭前快照。最终 trace 写入失败同样移除 result.json，避免把较早快照标为当前结果。取消仍经资源关闭及追踪收尾后传播。

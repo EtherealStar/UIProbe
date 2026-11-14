@@ -81,7 +81,7 @@
 
 ## M4：跨阶段收尾与真实演示验收
 
-### Batch 07：组合故障与生命周期
+### Batch 07：组合故障与生命周期（已完成，2026-11-14）
 
 组合执行／验收主故障、记录再次失败、浏览器清理失败、应用持有模型客户端关闭失败、最终结果写入失败和在线故障。补齐启动早于目录创建、总时限耗尽及外部取消的根追踪和错误传播。
 
@@ -89,9 +89,9 @@
 
 完成条件：主故障与后续故障分别可查，已知结论／动作数／截图及主 stop_reason 保持；本地不可写时返回内存摘要与真实可用路径，取消收尾后继续传播；外层根追踪覆盖应用资源关闭且收尾有界。
 
-验证入口：`test_session_lifecycle.py`、`test_session_input.py`、`test_session_zero_action.py`、`test_mvp_e2e.py` 和新增组合故障测试。
+验证入口：`test_session_lifecycle.py`、`test_session_input.py`、`test_session_zero_action.py`、`test_mvp_e2e.py` 和 `test_combined_failures.py`。
 
-### Batch 08：端到端验收与交付记录
+### Batch 08：端到端验收与交付记录（离线与真实模型本地演示完成；在线验收待执行）
 
 先运行完整离线检查，再通过 README 中的真实本地页面启动方式运行登录用例和初图用例。仅真实演示连接个人 Langfuse 与已配置模型；记录 session_id、trace_id、在线 trace 定位、本地目录、终态和观察到的导出情况。
 
@@ -141,3 +141,7 @@ uv run python -m uiprobe --case login-demo/mvp-initial-case.json --config login-
 票据未开始时先检查 blocker 的实际完成证据，不凭 ready-for-agent 推断已完成。每票停止时更新 progress、实际测试入口和决定；设计发生变化先更新拥有该契约的设计文档。
 
 测试和演示每次使用新运行目录，不覆盖旧产物。失败后保留诊断，再以新会话重做人工演示；应用不会自动恢复中断执行。发布草案时逐票迁移到 issues，保留编号与依赖，不修改旧 MVP 票据；重复发布先核对目标，不能覆写已存在票据的执行状态。
+
+## 本轮交付边界（2026-11-14）
+
+用户明确暂不配置 Langfuse，要求完成其余部分。真实模型登录和初图用例已在本地页面通过；个人 Langfuse 的真实导出、在线 trace 定位及页面检查保持待执行。此缺口不妨碍提交已验证的生命周期实现，但计划仍保持未完成，不归档。运行标识与验证证据见 progress。

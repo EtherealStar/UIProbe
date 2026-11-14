@@ -1,6 +1,8 @@
 """Local records with exclusive directories and atomic final results."""
 
 import json
+import sys
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,14 +15,31 @@ from pydantic_ai.messages import (
 )
 
 from .case_input import TestCase
+from .error_handling import LocatedFailure, describe
 from .observation import Screenshot
 
 
 class SessionRecord:
     def __init__(self, session_id: str, directory: Path):
+        self.failures: list[tuple] = []
         self.trace_id: str | None = None
         self.session_id = session_id
         self.directory = directory
+
+    @contextmanager
+    def writing(self, operation: str, *, defer: bool = False):
+        """Keep a primary exception while collecting failures of its evidence writes."""
+        primary = sys.exception()
+        try:
+            yield
+        except OSError as exc:
+            error, diagnostic = describe(
+                exc, "recording", operation, "write_failed", f"Cannot {operation}"
+            )
+            if primary is None and not defer:
+                raise LocatedFailure(error, diagnostic) from exc
+            self.failures.append((error, diagnostic))
+            print(f"{error.message}; error_id={error.error_id}", file=sys.stderr)
 
     @property
     def artifact_paths(self) -> list[str]:

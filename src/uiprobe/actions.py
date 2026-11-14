@@ -204,16 +204,17 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 action_index=d.budget.action_count,
                 screenshot_id=input_id,
             )
-            d.record.append(
-                {
-                    "type": "tool_finished",
-                    "status": "error",
-                    "error_id": error.error_id,
-                    "reason": error.message,
-                    "action_index": d.budget.action_count,
-                    **event,
-                }
-            )
+            with d.record.writing("append_tool_failure"):
+                d.record.append(
+                    {
+                        "type": "tool_finished",
+                        "status": "error",
+                        "error_id": error.error_id,
+                        "reason": error.message,
+                        "action_index": d.budget.action_count,
+                        **event,
+                    }
+                )
             raise LocatedFailure(error, diagnostic) from exc
         d.record.append(
             {"type": "tool_finished", "status": "completed", **event, **result}

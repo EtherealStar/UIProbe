@@ -2,8 +2,8 @@
 
 ## Current State
 
-- Status：M1—M3 implemented；M4 尚未实施。
-- Current milestone：M3 完成；下一批为 M4 / 07。用户本轮直接授权执行 M3 并提交。
+- Status：M1—M3 与跨阶段收尾已实现；真实模型本地演示通过，个人 Langfuse 在线验收待执行。
+- Current milestone：M4 / 07 完成，08 的离线与真实模型本地部分完成。用户明确暂不配置 Langfuse，完成其余部分并提交。
 - Last updated：2026-11-14，Asia/Shanghai。
 - Tracker：沿用已确认的本地文件 tracker；本 feature 草案尚未发布。
 
@@ -19,7 +19,7 @@
   - [x] 05 模型与验收失败保留完整诊断及可见部分输出。
   - [x] 06 Langfuse 故障可见且不改变测试结果。
 - [ ] M4：跨阶段收尾与真实演示验收。
-  - [ ] 07 跨阶段故障、超时和取消保留原始结论。
+  - [x] 07 跨阶段故障、超时和取消保留原始结论。
   - [ ] 08 完整离线回归与真实 Langfuse 演示。
 
 ## Surprises And Discoveries
@@ -47,7 +47,7 @@
 
 ## Outcomes And Retrospective
 
-M1—M3 已按用户授权实施并通过离线验证；M4 继续按票据依赖推进，真实在线验收保持待执行。
+跨阶段收尾与真实模型本地演示已完成；用户要求暂不配置个人 Langfuse，08 在线验收保持待执行，计划不归档。
 
 ## M1 实施证据（2026-11-14）
 
@@ -78,3 +78,24 @@ Ruff check、format --check、Pyright 通过；全量 unittest 60 tests OK（29.
 验证：`uv run ruff check .`、`uv run ruff format --check .`（60 files）、`uv run pyright`（0 errors）和 `git diff --check` 通过。`uv run python -m unittest discover -s tests -v` 发现并运行 70 tests，OK（49.745 秒）。新增 `test_failure_observability.py` 7 项、`test_export_failures.py` 3 项，分别跨生产 Session／原生模型和真实 SDK 导出路径；正常流式测试沿用受控 SSE fixture。另将暂存内容导出到独立目录，排除工作区原有的 CLI 有窗口入口和底层 ModelService 变更后，Ruff check／format（58 files）、Pyright（0 errors）及全量 unittest 67 tests 均通过（40.334 秒）；提交内容可独立运行。无真实模型或个人 Langfuse 调用。
 
 可见性限制：只保留原生 stream.get() 已暴露的部分；若请求流尚未建立，没有可补造的部分输出。SDK 队列日志只能证明其实际报告的丢弃；成功批次或 flush 不能证明远端逐条完整。跨阶段组合故障、取消与应用客户端关闭保留仍由 07 覆盖，真实在线演示由 08 覆盖，M4 保持未完成。
+
+## 跨阶段收尾与演示证据（2026-11-14，Asia/Shanghai）
+
+完成票据 07；票据 08 仅缺个人 Langfuse 真实在线验收。用户要求暂不配置 Langfuse，完成其余部分。
+
+- 派发故障后同时注入错误事件、执行历史、浏览器关闭和最终结果保存失败，最初 click 故障及 error_id 保持；action_count=1、最后截图 screen-1、无 Submission、无后续验收和动作重放。后续故障分别有摘要与可取得诊断。
+- 验收传输故障后诊断及历史写入再次失败，原始验收摘要保留；合法 passed Verdict 取得后最终历史保存失败，Verdict 仍 passed、Session 为 error，主 stop_reason 保持 verification_completed。
+- 实际应用入口覆盖客户端关闭抛错、五秒关闭超时、关闭后更新结果失败；已取得 Submission、Verdict、动作数和截图保持。更新成功时磁盘与内存摘要一致；更新失败时移除返回路径中的旧 result.json。根追踪覆盖客户端关闭，并关联关闭诊断。
+- 真实本地 Chromium 覆盖共享截止时间和外部取消；不形成 Submission、不进入验收，浏览器释放。应用取消与客户端关闭失败组合仍传播 CancelledError，并保留取消快照及根追踪。
+- 既有本地不可用目录、独立五秒保存时限、保存中取消、在线故障隔离与真实待导出载荷的图片排除回归继续作为验收依据。
+
+真实模型演示使用 README 的本地 HTTP 页面启动方式与实际 run_files 入口，执行／验收沿生产流式 adapter，共用真实配置。两次均 stop_reason=verification_completed、errors=[]；本地 trace 中 enabled=false、flush=not_requested、remote_delivery=unknown，没有个人 Langfuse 在线证据。
+
+| 用例 | session_id | trace_id | 终态 / 动作数 | 本地材料 |
+|---|---|---|---|---|
+| 初图零动作 | 01279694ab1443c2aa258e690a43d78d | 0ea0d5bb03fba88f1451765b24cddf38 | passed / 0 | `.scratch/uiprobe-mvp/runs/01279694ab1443c2aa258e690a43d78d/` |
+| 引用值登录 | 56acd79e7b444cf990af51aaddbc4e52 | cca711b67dcf96934ca70c0c34d223b3 | passed / 5 | `.scratch/uiprobe-mvp/runs/56acd79e7b444cf990af51aaddbc4e52/` |
+
+本地目录保留 result、全部 PNG、完整历史、实际发送视图、独立验收和 trace；运行产物不提交 Git。真实演示不补记旧 MVP 票据完成。个人 Langfuse 配置、真实导出、在线页面的完整文本／工具／验收／清理及无图片附件检查仍待执行；受控 OTLP 出口与 flush 不能替代这些证据。
+
+最终验证：`uv run ruff check .`、`uv run ruff format --check .`（61 files）、`uv run pyright`（0 errors）及 `git diff --check` 全部通过。新增 `test_combined_failures.py` 6 项，目标测试全部通过（12.957 秒）；全量 unittest 实际发现并运行 76 tests，OK（59.158 秒）。离线测试使用真实本地 Chromium、受控模型和受控导出，不依赖真实凭据；上述两次真实模型演示单独记录。本轮保留原有未提交的流式、有窗口模式、旧 MVP 文档和设计改动，只提交本次实现与记录。

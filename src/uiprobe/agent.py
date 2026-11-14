@@ -235,8 +235,9 @@ class ExecutionAgent:
                         async for _ in run:
                             feedback(run.all_messages())
                     finally:
-                        feedback(run.all_messages())
                         context.history.extend(run.all_messages()[seen:])
+                        with record.writing("save_tool_feedback"):
+                            feedback(run.all_messages())
                     result = run.result
                     assert result is not None
             return Submission(result.output)
@@ -252,6 +253,7 @@ class ExecutionAgent:
                 setattr(exc, "uiprobe_failure", (error, diagnostic))
             raise
         finally:
-            record.save_messages(
-                "execution", context.history, context.browser_state.screenshot
-            )
+            with record.writing("save_execution_history"):
+                record.save_messages(
+                    "execution", context.history, context.browser_state.screenshot
+                )

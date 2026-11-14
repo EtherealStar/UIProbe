@@ -136,8 +136,10 @@ class Verification:
                 f"Visual verification system failed ({type(exc).__name__})",
             )
             fact("diagnostic", **diagnostic)
-            record.save_diagnostic(diagnostic)
-            record.append({"type": "verification_error", **error.__dict__})
+            record.failures.append((error, diagnostic))
+            with record.writing("save_verification_failure"):
+                record.save_diagnostic(diagnostic)
+                record.append({"type": "verification_error", **error.__dict__})
             reason = f"{error.message}; error_id={error.error_id}"
             assertions = [
                 AssertionResult(
@@ -149,7 +151,8 @@ class Verification:
                 for a in test_case.assertions
             ]
         finally:
-            record.save_messages("verification", history, screenshot)
+            with record.writing("save_verification_history", defer=True):
+                record.save_messages("verification", history, screenshot)
         status: Status = (
             "failed"
             if any(a.status == "failed" for a in assertions)

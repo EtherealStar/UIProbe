@@ -181,9 +181,18 @@ class Session:
                             "execution": "execute_agent",
                             "verification": "evaluate_assertions",
                         }[phase],
-                        "run_failed",
+                        "deadline_exhausted"
+                        if isinstance(exc, TimeoutError)
+                        else "run_failed",
                         "Session operation failed",
                     )
+                    if record is not None:
+                        # Verification may already have caught its model failure.
+                        # Evidence writes must follow that original failure.
+                        for deferred_error, deferred_diagnostic in record.failures:
+                            if deferred_error.phase != "recording":
+                                result.errors.append(deferred_error)
+                                diagnostics.append(deferred_diagnostic)
                     result.errors.append(error)
                     diagnostics.append(diagnostic)
                 finally:
@@ -196,12 +205,18 @@ class Session:
                         try:
                             async with asyncio.timeout(5):
                                 await browser.close()
-                        except Exception:
-                            result.errors.append(
-                                SessionError(
-                                    "cleanup", "close_failed", "Cannot close browser"
-                                )
+                        except (Exception, asyncio.CancelledError) as exc:
+                            if isinstance(exc, asyncio.CancelledError):
+                                cancelled = True
+                            error, diagnostic = describe(
+                                exc,
+                                "cleanup",
+                                "close_browser",
+                                "close_failed",
+                                "Cannot close browser",
                             )
+                            result.errors.append(error)
+                            diagnostics.append(diagnostic)
                     if result.errors:
                         result.status = "error"
         if (
@@ -212,6 +227,13 @@ class Session:
             result.errors.append(
                 SessionError("input", "timeout", "Input preparation exceeded deadline")
             )
+        if record is not None:
+            for error, diagnostic in record.failures:
+                if not any(e.error_id == error.error_id for e in result.errors):
+                    result.errors.append(error)
+                    diagnostics.append(diagnostic)
+            if result.errors:
+                result.status = "error"
         for error in result.errors:
             if not any(d["error_id"] == error.error_id for d in diagnostics):
                 diagnostics.append(
@@ -267,40 +289,53 @@ class Session:
 
     @staticmethod
     def _finish_record(record, result, started_record, diagnostics=()):
-        try:
-            for diagnostic in diagnostics:
-                fact("diagnostic", **diagnostic)
-                record.save_diagnostic(diagnostic)
-        except OSError as exc:
-            error, _ = describe(
-                exc,
-                "recording",
-                "save_diagnostic",
-                "diagnostic_save_failed",
-                "Cannot save diagnostic",
-            )
+        def failed(exc, operation, code, message):
+            import sys
+
+            error, diagnostic = describe(exc, "recording", operation, code, message)
             result.errors.append(error)
             result.status = "error"
+            fact("diagnostic", **diagnostic)
+            print(f"{message}; error_id={error.error_id}", file=sys.stderr)
+            if operation != "save_diagnostic":
+                try:
+                    record.save_diagnostic(diagnostic)
+                except OSError as write_exc:
+                    failed(
+                        write_exc,
+                        "save_diagnostic",
+                        "diagnostic_save_failed",
+                        "Cannot save diagnostic",
+                    )
+
+        for diagnostic in diagnostics:
+            fact("diagnostic", **diagnostic)
+            try:
+                record.save_diagnostic(diagnostic)
+            except OSError as exc:
+                failed(
+                    exc,
+                    "save_diagnostic",
+                    "diagnostic_save_failed",
+                    "Cannot save diagnostic",
+                )
+                break
         try:
             if not started_record:
                 record.append({"type": "session_started"})
             for error in result.errors:
                 record.append({"type": "error", **error.__dict__})
             record.append({"type": "session_finished", "status": result.status})
-        except OSError:
-            result.status = "error"
-            result.errors.append(
-                SessionError("recording", "append_failed", "Cannot append record")
-            )
+        except OSError as exc:
+            failed(exc, "append_events", "append_failed", "Cannot append record")
         try:
             result.artifact_paths = record.finish(result, [])
-        except OSError:
-            result.status = "error"
-            result.errors.append(
-                SessionError("recording", "finish_failed", "Cannot save result")
-            )
+        except OSError as exc:
+            failed(exc, "save_result", "finish_failed", "Cannot save result")
             try:
-                result.artifact_paths = record.artifact_paths
+                result.artifact_paths = [
+                    p for p in record.artifact_paths if not p.endswith("/result.json")
+                ]
             except OSError:
                 result.artifact_paths = []
         return result

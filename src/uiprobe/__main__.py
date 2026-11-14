@@ -51,10 +51,41 @@ async def run_files(case_path: Path, config_path: Path) -> SessionResult:
             "configure_model",
             config,
         )
+    result = None
     try:
-        return await run_application(test_json, config, service)
+        result = await run_application(test_json, config, service)
     finally:
-        await close_service(service)
+        try:
+            async with asyncio.timeout(5):
+                await close_service(service)
+        except Exception as exc:
+            if result is None:
+                # Preserve an active cancellation or application failure.
+                from .observability import fact
+
+                _, diagnostic = describe(
+                    exc,
+                    "cleanup",
+                    "close_model_client",
+                    "close_failed",
+                    "Cannot close model client",
+                )
+                fact("diagnostic", **diagnostic)
+            else:
+                error, diagnostic = describe(
+                    exc,
+                    "cleanup",
+                    "close_model_client",
+                    "close_failed",
+                    "Cannot close model client",
+                )
+                result.errors.append(error)
+                result.status = "error"
+                from .observability import update_result
+
+                result = await update_result(result, diagnostic)
+    assert result is not None
+    return result
 
 
 @traced("model_client.close")

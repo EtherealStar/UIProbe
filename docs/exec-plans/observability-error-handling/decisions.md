@@ -85,3 +85,9 @@ Recorder 保存 trace.json（trace_id、原生及项目 spans、可知在线告�
 StreamingModel 使用原生 request_stream/stream.get 聚合；中断只给异常附带已暴露的部分响应，所属执行／验收边界形成阶段诊断。部分内容不进入提交或工具派发，不另写 SSE 协议；正常完整响应仍由原生 instrumentation 计量一次。传输最终连接失败仍由 SDK max_retries=2 处理。
 
 SDK exporter 返回值和 force_flush 完成表达不同事实；分别保存批次计数、flush 与 remote_delivery=unknown。通过锁定 SDK 的实际队列日志记录丢弃，不读取私有队列推断成功。导出故障诊断保存在 trace.json 的 observability_diagnostics，避免污染 Session.errors；终端使用同一 error_id。退出线程只返回本地等待结果，超时的主线程快照不被迟到的成功改写。跨阶段取消与多故障保留不扩展到本阶段，仍由 07 验收。
+
+## 2026-11-14：跨阶段收尾与结果快照
+
+用户授权执行跨阶段收尾与真实演示验收并提交。记录故障处置中的再次写入失败暂存在记录对象，Session 合并到结果，不覆盖主故障。应用客户端关闭独立限五秒，关闭失败后通过绑定 Recorder 更新诊断与结果，更新等待同样限五秒；更新失败或最终 trace 保存失败移除返回路径中的 result.json，磁盘旧文件仅代表较早快照。已有结论和主停止原因保留，取消继续传播。真实模型配置可用，个人 Langfuse 配置尚缺，真实在线验收按实际证据保留缺口。
+
+用户随后明确“先不配置，完成其他的部分”。因此本轮不配置个人 Langfuse，完成离线实现、回归和真实模型本地演示；在线验收继续待执行，计划不关闭、不归档。

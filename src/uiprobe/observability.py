@@ -245,6 +245,9 @@ def traced(name):
                 )
                 result.errors.append(error)
                 result.status = "error"
+                result.artifact_paths = [
+                    p for p in result.artifact_paths if not p.endswith("/result.json")
+                ]
             return result
 
         return call
@@ -267,3 +270,38 @@ def bind_record(record):
         scope.root.set_attribute("session_id", record.session_id)
         record.trace_id = format(scope.root.get_span_context().trace_id, "032x")
         scope.save()
+
+
+async def update_result(result, diagnostic):
+    """Refresh an application result after cleanup; stale snapshots are not artifacts."""
+    import asyncio
+    from copy import deepcopy
+
+    from .session import Session
+
+    fact("diagnostic", **diagnostic)
+    scope = _current.get()
+    if scope is None or scope.record is None:
+        return result
+    record = scope.record
+    try:
+        async with asyncio.timeout(5):
+            return await asyncio.to_thread(
+                Session._finish_record, record, deepcopy(result), True, [diagnostic]
+            )
+    except TimeoutError as exc:
+        from .error_handling import describe
+
+        error, diagnostic = describe(
+            exc,
+            "recording",
+            "save_application_result",
+            "finalization_timeout",
+            "Cannot update result after client cleanup",
+        )
+        result.errors.append(error)
+        fact("diagnostic", **diagnostic)
+        result.artifact_paths = [
+            p for p in result.artifact_paths if not p.endswith("/result.json")
+        ]
+        return result

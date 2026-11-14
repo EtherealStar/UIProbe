@@ -106,3 +106,5 @@ uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
 
 模型或浏览器故障可通过摘要的 error_id 查找 `diagnostics/<error_id>.json`；工具纠正保存在事件和完整历史中，不直接改变测试结论。流中断的可见部分标记 incomplete，只用于诊断。
 在线观测的独立诊断位于 trace.json 的 observability_diagnostics；observability_incomplete 表示已有告警。export 的批次成功／失败数与 flush 分别表达 SDK 可知情况；flush completed 仍可能伴随导出失败，remote_delivery 始终为 unknown。未提供 Langfuse 配置时只记录本地，部分配置缺失则报告观测告警。
+
+跨阶段收尾保留最初停止原因，记录与清理故障分别列入 errors。模型客户端关闭最多等待五秒；关闭失败后尝试更新结果，已有 Submission、Verdict、动作计数与截图保持。若更新或最终追踪保存失败，返回的 artifact_paths 不包含旧 result.json；磁盘旧文件只表示较早快照，以标准输出的内存结果为准。
