@@ -2,8 +2,8 @@
 
 ## Current State
 
-- Status：M1、M2 implemented；M3—M4 尚未实施。
-- Current milestone：M2 完成；下一批为 M3 / 04、05、06。用户本轮直接授权执行 M2。
+- Status：M1—M3 implemented；M4 尚未实施。
+- Current milestone：M3 完成；下一批为 M4 / 07。用户本轮直接授权执行 M3 并提交。
 - Last updated：2026-11-14，Asia/Shanghai。
 - Tracker：沿用已确认的本地文件 tracker；本 feature 草案尚未发布。
 
@@ -14,10 +14,10 @@
 - [x] M2：正常测试的本地与 Langfuse 全链路可查。
   - [x] 02 零动作会话贯通本地与 Langfuse 追踪。
   - [x] 03 正常计划与浏览器动作全程可查。
-- [ ] M3：故障链可解释且不改变执行策略。
-  - [ ] 04 工具拒绝与派发后故障可区分。
-  - [ ] 05 模型与验收失败保留完整诊断及可见部分输出。
-  - [ ] 06 Langfuse 故障可见且不改变测试结果。
+- [x] M3：故障链可解释且不改变执行策略。
+  - [x] 04 工具拒绝与派发后故障可区分。
+  - [x] 05 模型与验收失败保留完整诊断及可见部分输出。
+  - [x] 06 Langfuse 故障可见且不改变测试结果。
 - [ ] M4：跨阶段收尾与真实演示验收。
   - [ ] 07 跨阶段故障、超时和取消保留原始结论。
   - [ ] 08 完整离线回归与真实 Langfuse 演示。
@@ -47,7 +47,7 @@
 
 ## Outcomes And Retrospective
 
-M1 已按用户授权实施并通过离线验证；M2—M4 继续按票据依赖推进，真实在线验收保持待执行。
+M1—M3 已按用户授权实施并通过离线验证；M4 继续按票据依赖推进，真实在线验收保持待执行。
 
 ## M1 实施证据（2026-11-14）
 
@@ -66,3 +66,15 @@ M2—M4、在线导出、真实演示及组合故障仍未完成。草案文件�
 双轴 code-review 发现锁定 SDK 忽略 force_flush timeout 参数，已改为 daemon 线程 flush + shutdown，主线程 join 2.5 秒；修复资源关闭和 ContextVar finally 重置。最终本地追踪写入失败保留内存结果并标记 recording 错误，已保存结果快照可能早于应用收尾，完整组合语义继续由 07 验证。
 
 Ruff check、format --check、Pyright 通过；全量 unittest 60 tests OK（29.616 秒，后续最终复跑见提交时报告）。本地真实 Chromium、受控模型和受控 OTLP 出口，无真实模型或个人 Langfuse 调用。新增 test_observability.py 覆盖 404、在线异常、阻塞退出、真实 OTLP HTTP；扩充既有零动作和应用登录回归。完整失败状态字段、流中断和跨阶段组合故障仍属 M3/M4。
+
+## M3 实施证据（2026-11-14）
+
+完成票据 04、05、06。沿已有未提交接合点补齐框架前置拒绝、动作故障、模型与验收诊断和导出故障状态；保留其余有窗口模式、底层 ModelService 和旧 MVP 文档改动。
+
+- 工具拒绝采用框架原生反馈，包含未知工具、缺失／非法参数和未知字段；既有计划、旧截图、越界、引用、焦点与等待回归继续通过。拒绝可纠正且不扣动作。真实 Chromium 注入派发异常、截图异常、新页面和页面关闭，均保留一个已派发动作及 screen-1，无提交、无后续模型请求和验收；error_id、call_id、动作与截图在诊断及受控 OTLP 出口一致。
+- 执行保留原生预算异常类型并附带同一诊断，Session 复用标识。验收缺图、截止时间与无效输出分类；系统错误的全部断言为 error 且附 error_id，合法 failed/error 的请求数不变。模型使用原生流聚合；受控 OpenAI SSE 中断保存一次可见文本和未完成参数，incomplete=true，不执行半份工具。非标准 200 响应停止；连接最终失败观察到 SDK 原生 3 次传输尝试，无项目重试。
+- trace.json 单独保存在线故障诊断、观测不完整标志、批次成功／失败数、flush 和远端 unknown；exporter 返回 FAILURE、抛出异常和配置缺失时，真实本地页面的 passed/failed/error 均保持原值。真实 SDK 队列溢出告警、flush false／异常、shutdown 异常和阻塞退出均可定位。flush completed 不覆盖已知失败；2.5 秒超时快照在后台释放后仍为 timed_out。
+
+验证：`uv run ruff check .`、`uv run ruff format --check .`（60 files）、`uv run pyright`（0 errors）和 `git diff --check` 通过。`uv run python -m unittest discover -s tests -v` 发现并运行 70 tests，OK（49.745 秒）。新增 `test_failure_observability.py` 7 项、`test_export_failures.py` 3 项，分别跨生产 Session／原生模型和真实 SDK 导出路径；正常流式测试沿用受控 SSE fixture。另将暂存内容导出到独立目录，排除工作区原有的 CLI 有窗口入口和底层 ModelService 变更后，Ruff check／format（58 files）、Pyright（0 errors）及全量 unittest 67 tests 均通过（40.334 秒）；提交内容可独立运行。无真实模型或个人 Langfuse 调用。
+
+可见性限制：只保留原生 stream.get() 已暴露的部分；若请求流尚未建立，没有可补造的部分输出。SDK 队列日志只能证明其实际报告的丢弃；成功批次或 flush 不能证明远端逐条完整。跨阶段组合故障、取消与应用客户端关闭保留仍由 07 覆盖，真实在线演示由 08 覆盖，M4 保持未完成。

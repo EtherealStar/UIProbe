@@ -97,3 +97,7 @@ SessionError 的 operation 与 error_id 已实现。Error Handling 的 describe 
 Recorder 将每条诊断保存到 diagnostics/<error_id>.json，包含摘要字段、exception_type、exception_message 和 traceback。traceback 包含 Python 原始 cause/context 异常链；字段校验等明确业务失败没有异常对象，相应异常字段为 null，不伪造堆栈。诊断目录列入 artifact_paths。无可用目录只返回内存摘要；诊断保存失败追加独立 recording 错误，不声称诊断保存成功。
 
 首批错误码：invalid_input（validate_input）、startup_failed（read_config/read_case/configure_model）、begin_failed（create_record）、navigation_failed（navigate）、capture_failed（capture_initial）、screenshot_save_failed（save_initial_screenshot）、diagnostic_save_failed（save_diagnostic）。保留已有 run_failed、cancelled、close_failed、append_failed、finish_failed、timeout、finalization_timeout，供后续票据逐路径细化。初始化底层 OSError 不再被推断为 recording；初图与事件写入通过实际写入边界归因。
+
+## 模型、动作与验收故障分类
+
+模型最终故障按原生异常类型区分 deadline_exhausted、model_budget_exhausted、model_output_invalid、model_request_failed，不解析异常英文消息推断类别。执行保留原生异常供框架调用方使用，同时携带同一摘要与诊断；Session 复用 error_id。动作诊断关联 call_id、action_index、最后成功 screenshot_id，操作后取图明确为 capture_after_action；必要写入归 recording。验收缺图为 evidence_missing，其余模型故障采用同一分类。系统故障为全部断言生成说明系统失败及 error_id 的 error，不改写为视觉证据不足。

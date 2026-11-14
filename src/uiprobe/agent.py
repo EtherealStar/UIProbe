@@ -8,23 +8,59 @@ from openai import AsyncOpenAI
 from pydantic_ai import Agent as FrameworkAgent
 from pydantic_ai import BinaryContent
 from pydantic_ai.capabilities import Hooks, ProcessHistory
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
-from pydantic_ai.models import Model
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from .actions import ActionToolset, Dependencies, RunBudget, TodoItem, tools
 from .browser import Browser
 from .case_input import TestCase
-from .observability import instrumentation, traced
+from .error_handling import LocatedFailure, describe, model_failure_code
+from .observability import fact, instrumentation, traced
 from .observation import BrowserState, Submission
 from .recording import SessionRecord
 
 
+class StreamingModel(WrapperModel):
+    """Use native stream assembly before handing a complete turn to the agent."""
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        async with self.wrapped.request_stream(
+            messages, model_settings, model_request_parameters
+        ) as stream:
+            try:
+                async for _ in stream:
+                    pass
+            except BaseException as exc:
+                partial = stream.get()
+                partial_output = ModelMessagesTypeAdapter.dump_json([partial]).decode()
+                setattr(exc, "uiprobe_partial_output", partial_output)
+                raise
+            return stream.get()
+
+
 def model_from_client(client: AsyncOpenAI, model_name: str) -> Model:
     """Borrow the application-owned SDK client without changing its lifetime."""
-    return OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
+    return StreamingModel(
+        OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
+    )
 
 
 @dataclass
@@ -77,11 +113,47 @@ class ExecutionAgent:
         tool_call_limit: int,
     ) -> Submission:
         seen = 0
+        feedback_seen: set[int] = set()
+
+        def feedback(messages):
+            for message in messages:
+                if isinstance(message, ModelRequest):
+                    for part in message.parts:
+                        if (
+                            isinstance(part, RetryPromptPart)
+                            or (
+                                isinstance(part, ToolReturnPart)
+                                and part.outcome == "retried"
+                            )
+                        ) and id(part) not in feedback_seen:
+                            feedback_seen.add(id(part))
+                            event = {
+                                "type": "tool_feedback",
+                                "call_id": part.tool_call_id,
+                                "tool": part.tool_name,
+                                "reason": part.model_response()
+                                if isinstance(part, RetryPromptPart)
+                                else part.content,
+                            }
+                            record.append(event)
+                            fact(
+                                "tool_feedback",
+                                **{
+                                    k: (
+                                        json.dumps(v)
+                                        if isinstance(v, (list, dict))
+                                        else v
+                                    )
+                                    for k, v in event.items()
+                                    if v is not None
+                                },
+                            )
 
         async def capture(messages: list[ModelMessage]) -> list[ModelMessage]:
             nonlocal seen
             if asyncio.get_running_loop().time() >= deadline_at:
                 raise TimeoutError
+            feedback(messages)
             context.history.extend(messages[seen:])
             state = context.browser_state
             observation = ModelRequest(
@@ -161,11 +233,25 @@ class ExecutionAgent:
                 ) as run:
                     try:
                         async for _ in run:
-                            pass
+                            feedback(run.all_messages())
                     finally:
+                        feedback(run.all_messages())
                         context.history.extend(run.all_messages()[seen:])
                     result = run.result
                     assert result is not None
             return Submission(result.output)
+        except Exception as exc:
+            if not isinstance(exc, LocatedFailure):
+                error, diagnostic = describe(
+                    exc,
+                    "execution",
+                    "execute_agent",
+                    model_failure_code(exc),
+                    f"Execution failed: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}",
+                )
+                setattr(exc, "uiprobe_failure", (error, diagnostic))
+            raise
         finally:
-            record.save_messages("execution", context.history, state.screenshot)
+            record.save_messages(
+                "execution", context.history, context.browser_state.screenshot
+            )

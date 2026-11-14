@@ -15,6 +15,7 @@ from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 
 from .browser import Browser, BrowserRejected
 from .case_input import StrictValue
+from .error_handling import LocatedFailure, describe
 from .observability import fact
 from .recording import SessionRecord
 
@@ -147,6 +148,7 @@ class ActionToolset(WrapperToolset[Dependencies]):
             input_screenshot_id=input_id,
         )
         d.record.append({"type": "tool_started", **event})
+        operation = name
         try:
             if asyncio.get_running_loop().time() >= d.budget.deadline_at:
                 raise TimeoutError
@@ -156,7 +158,9 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 if not d.context.plan_created:
                     raise ModelRetry("Create a nonempty TODO before browser actions")
                 result = await super().call_tool(name, tool_args, ctx, tool)
+                operation = "capture_after_action"
                 state = await d.browser.capture(d.budget.deadline_at)
+                operation = "save_action_screenshot"
                 d.record.save_screenshot(state.screenshot)
                 d.context.browser_state = state
                 summary = ActionSummary(
@@ -172,18 +176,45 @@ class ActionToolset(WrapperToolset[Dependencies]):
             else:
                 result = await super().call_tool(name, tool_args, ctx, tool)
         except (BrowserRejected, ModelRetry) as exc:
-            d.record.append({"type": "tool_finished", "status": "rejected", **event})
+            d.record.append(
+                {
+                    "type": "tool_finished",
+                    "status": "rejected",
+                    "reason": str(exc),
+                    **event,
+                }
+            )
+            fact(
+                "tool_rejected",
+                reason=str(exc),
+                call_id=ctx.tool_call_id or "",
+                tool=name,
+            )
             raise ModelRetry(str(exc)) from None
-        except BaseException:
+        except Exception as exc:
+            error, diagnostic = describe(
+                exc,
+                "recording" if operation == "save_action_screenshot" else "execution",
+                operation,
+                "action_failed",
+                f"{operation} failed: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}",
+            )
+            diagnostic.update(
+                call_id=ctx.tool_call_id,
+                action_index=d.budget.action_count,
+                screenshot_id=input_id,
+            )
             d.record.append(
                 {
                     "type": "tool_finished",
                     "status": "error",
+                    "error_id": error.error_id,
+                    "reason": error.message,
                     "action_index": d.budget.action_count,
                     **event,
                 }
             )
-            raise
+            raise LocatedFailure(error, diagnostic) from exc
         d.record.append(
             {"type": "tool_finished", "status": "completed", **event, **result}
         )

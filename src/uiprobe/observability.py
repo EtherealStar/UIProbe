@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import os
 import sys
 import threading
@@ -33,18 +34,29 @@ class LocalExporter(SpanExporter):
 
 
 class IsolatedExporter(SpanExporter):
-    def __init__(self, exporter, warnings):
+    def __init__(self, exporter, scope):
         self.exporter = exporter
-        self.warnings = warnings
+        self.scope = scope
 
     def export(self, spans):
         try:
             result = self.exporter.export(spans)
+            key = (
+                "batches_succeeded"
+                if result == SpanExportResult.SUCCESS
+                else "batches_failed"
+            )
+            self.scope.export_status[key] += 1
             if result != SpanExportResult.SUCCESS:
-                self.warnings.append("Online export failed; remote delivery unknown")
+                self.scope.warn(
+                    "export", "Online export failed; remote delivery unknown"
+                )
             return result
         except Exception as exc:
-            self.warnings.append(f"Online export failed: {type(exc).__name__}")
+            self.scope.export_status["batches_failed"] += 1
+            self.scope.warn(
+                "export", "Online export failed; remote delivery unknown", exc
+            )
             return SpanExportResult.FAILURE
 
     def shutdown(self):
@@ -57,11 +69,26 @@ class RunTrace:
         self.provider = TracerProvider(shutdown_on_exit=False)
         self.provider.add_span_processor(SimpleSpanProcessor(self.local))
         self.warnings = []
+        self.diagnostics = []
         self.local_error: OSError | None = None
+        self.export_status = {
+            "enabled": False,
+            "flush": "not_requested",
+            "batches_succeeded": 0,
+            "batches_failed": 0,
+            "remote_delivery": "unknown",
+        }
         self.record = None
         self.root: Span | None = None
         try:
-            if exporter is None and os.getenv("LANGFUSE_PUBLIC_KEY"):
+            if exporter is None and any(
+                os.getenv(key)
+                for key in (
+                    "LANGFUSE_PUBLIC_KEY",
+                    "LANGFUSE_SECRET_KEY",
+                    "LANGFUSE_BASE_URL",
+                )
+            ):
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter,
                 )
@@ -77,14 +104,16 @@ class RunTrace:
                     timeout=2,
                 )
             if exporter is not None:
+                self.export_status["enabled"] = True
+                self.export_status["flush"] = "pending"
                 self.provider.add_span_processor(
                     BatchSpanProcessor(
-                        IsolatedExporter(exporter, self.warnings),
+                        IsolatedExporter(exporter, self),
                         export_timeout_millis=2000,
                     )
                 )
         except Exception as exc:
-            self.warnings.append(f"Online tracing unavailable: {type(exc).__name__}")
+            self.warn("configure_export", "Online tracing unavailable", exc)
         self.tracer = self.provider.get_tracer("uiprobe")
         self.instrument = InstrumentationSettings(
             tracer_provider=self.provider,
@@ -93,9 +122,31 @@ class RunTrace:
             include_model_request_parameters=True,
         )
 
+    def warn(self, operation, message, exc=None):
+        from .error_handling import SessionError, describe
+
+        if exc is None:
+            summary = SessionError(
+                "observability", "online_incomplete", message, operation
+            )
+            diagnostic = {
+                **summary.__dict__,
+                "exception_type": None,
+                "exception_message": None,
+                "traceback": None,
+            }
+        else:
+            summary, diagnostic = describe(
+                exc, "observability", operation, "online_incomplete", message
+            )
+        self.warnings.append(f"{message}; error_id={summary.error_id}")
+        self.diagnostics.append(diagnostic)
+
     def save(self):
         if self.record is not None:
-            self.record.save_trace(self.local.spans, self.warnings)
+            self.record.save_trace(
+                self.local.spans, self.warnings, self.export_status, self.diagnostics
+            )
 
 
 @contextmanager
@@ -106,27 +157,56 @@ def run_trace(exporter=None):
         return
     scope = RunTrace(exporter)
     token = _current.set(scope)
+
+    class QueueWarnings(logging.Handler):
+        def emit(self, record):
+            if _current.get() is scope and record.levelno >= logging.WARNING:
+                scope.warn("sdk_queue", record.getMessage())
+
+    logger = logging.getLogger("opentelemetry.sdk._shared_internal")
+    handler = QueueWarnings()
+    logger.addHandler(handler)
     try:
         with scope.tracer.start_as_current_span("application") as root:
             scope.root = root
             yield scope
     finally:
         try:
+            outcome = []
 
             def flush():
                 try:
-                    scope.provider.force_flush()
-                    scope.provider.shutdown()
+                    flushed = scope.provider.force_flush()
+                    outcome.append("completed" if flushed else "failed")
+                    if not flushed:
+                        scope.warn(
+                            "flush", "Online flush failed; remote delivery unknown"
+                        )
                 except Exception as exc:
-                    scope.warnings.append(f"Online flush failed: {type(exc).__name__}")
+                    outcome.append("failed")
+                    scope.warn("flush", "Online flush failed", exc)
+                finally:
+                    try:
+                        scope.provider.shutdown()
+                    except Exception as exc:
+                        outcome[:] = ["failed"]
+                        scope.warn(
+                            "shutdown_export", "Online exporter shutdown failed", exc
+                        )
 
             worker = threading.Thread(target=flush, daemon=True)
             worker.start()
             worker.join(2.5)
-            if worker.is_alive():
-                scope.warnings.append(
-                    "Online flush incomplete; remote delivery unknown"
-                )
+            if scope.export_status["enabled"]:
+                if worker.is_alive():
+                    scope.export_status["flush"] = "timed_out"
+                    scope.warn(
+                        "flush", "Online flush incomplete; remote delivery unknown"
+                    )
+                else:
+                    scope.export_status["flush"] = outcome[0]
+            for warning in scope.warnings:
+                print(warning, file=sys.stderr)
             try:
                 scope.save()
             except OSError as exc:
@@ -137,6 +217,7 @@ def run_trace(exporter=None):
                     file=sys.stderr,
                 )
         finally:
+            logger.removeHandler(handler)
             _current.reset(token)
 
 

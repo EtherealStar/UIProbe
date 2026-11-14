@@ -75,3 +75,13 @@ Consequences：08 记录真实 session／trace 证据，缺配置时明确保持
 Recorder 保存 trace.json（trace_id、原生及项目 spans、可知在线告警）、execution-requests.jsonl 和 verification-requests.jsonl（每次实际发送视图，图片替换为 screenshot 引用）。原有历史、PNG、验收及结果布局保留。事件关联 trace_id；工具保留 call_id、参数、实际结果，派发事件保留 action_index 和剩余时间，浏览器记录导航 HTTP 状态、最终 URL 与截图尺寸。HTTP 4xx/5xx 不独立导致失败。
 
 在线采用 Langfuse OTLP HTTP 接口（LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY），无公钥时仅本地记录。BatchSpanProcessor 批量投递，HTTP timeout=2 秒，退出在独立 daemon 线程 flush + shutdown，主线程 join 最多等待 2500ms（锁定 SDK 忽略原生 timeout 参数）；不逐条确认远端。初始化及 exporter 异常隔离为观测告警。更完整的故障／取消组合与状态表达仍由后续批次完成。
+
+## 2026-11-14：故障分类与原生可见性
+
+用户明确授权执行 M3 并提交；本次不以 tracker 草案尚未发布为阻塞。04—06 完成，草案不批量发布；范围与原计划一致。
+
+执行通过异常附带纯数据诊断，保留 UsageLimitExceeded 等原生类型，Session.describe 复用摘要与 error_id；动作 LocatedFailure 沿原路径传播。锁定 Pydantic AI 实际将工具纠正表示为 ToolReturnPart(outcome=retried, retry=RetryInfo)，不能只检查旧 RetryPromptPart；生产采集兼容两者，不复制框架校验。
+
+StreamingModel 使用原生 request_stream/stream.get 聚合；中断只给异常附带已暴露的部分响应，所属执行／验收边界形成阶段诊断。部分内容不进入提交或工具派发，不另写 SSE 协议；正常完整响应仍由原生 instrumentation 计量一次。传输最终连接失败仍由 SDK max_retries=2 处理。
+
+SDK exporter 返回值和 force_flush 完成表达不同事实；分别保存批次计数、flush 与 remote_delivery=unknown。通过锁定 SDK 的实际队列日志记录丢弃，不读取私有队列推断成功。导出故障诊断保存在 trace.json 的 observability_diagnostics，避免污染 Session.errors；终端使用同一 error_id。退出线程只返回本地等待结果，超时的主线程快照不被迟到的成功改写。跨阶段取消与多故障保留不扩展到本阶段，仍由 07 验收。

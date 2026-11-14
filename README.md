@@ -102,3 +102,7 @@ uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
 ~~~
 
 运行追踪默认保存到同一产物目录的 trace.json；每次实际模型发送视图保存到 execution-requests.jsonl 和 verification-requests.jsonl。图片引用 screenshots/ 中的 PNG，在线不上传图片。配置 LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY 可启用 Langfuse OTLP 导出；在线不可用不会改变验收判断。退出提交等待最多 2.5 秒，flush 完成不表示远端逐条确认。
+
+
+模型或浏览器故障可通过摘要的 error_id 查找 `diagnostics/<error_id>.json`；工具纠正保存在事件和完整历史中，不直接改变测试结论。流中断的可见部分标记 incomplete，只用于诊断。
+在线观测的独立诊断位于 trace.json 的 observability_diagnostics；observability_incomplete 表示已有告警。export 的批次成功／失败数与 flush 分别表达 SDK 可知情况；flush completed 仍可能伴随导出失败，remote_delivery 始终为 unknown。未提供 Langfuse 配置时只记录本地，部分配置缺失则报告观测告警。

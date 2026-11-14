@@ -37,3 +37,7 @@ complete() 是现有底层单次请求入口，返回 SDK 响应并传播 SDK �
 
 python -m uiprobe --case <用例路径> --config <运行配置路径> 读取文件和模型连接配置，创建 ModelService 并在退出时关闭客户端。run_application 借用该服务装配执行与验收，不接管连接生命周期。
 标准输出为 SessionResult JSON；passed、failed、error 分别返回 0、1、2。文件读取或模型配置启动错误返回安全内存结果，无产物路径且不启动 Browser。外部取消经 Session 收尾后继续传播。
+
+## 默认流式传输
+
+所有模型请求默认使用 `stream=true`。ModelService.complete 使用 SDK 原生流式聚合，仍返回完整 ChatCompletion；执行和验收共用的模型 adapter 使用 Pydantic AI 原生 request_stream 聚合为完整 ModelResponse，再交回原有框架循环。仅在完整响应聚合成功后执行工具或形成提交、验收输出，不执行部分工具参数。连接关闭、截止时间、框架预算的约束保持成立。

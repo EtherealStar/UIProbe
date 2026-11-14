@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 from openai import AsyncOpenAI
+from stream_fixtures import streamed_completion
 from test_session_input import case, config
 from trace_fixtures import CapturingExporter
 
@@ -55,9 +56,8 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                     "role": "assistant",
                     "content": "Initial observation submitted",
                 }
-            return httpx.Response(
-                200,
-                json={
+            return streamed_completion(
+                {
                     "id": "response",
                     "object": "chat.completion",
                     "created": 1,
@@ -70,7 +70,7 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                         "completion_tokens": 1,
                         "total_tokens": 2,
                     },
-                },
+                }
             )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -147,6 +147,7 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertNotIn("secret-value", history)
                         self.assertNotIn("data:image", history)
                     self.assertEqual(len(requests), 4)
+                    self.assertTrue(all(r["stream"] for r in requests))
                     self.assertNotIn("secret-value", repr(requests))
                     self.assertNotIn("Login", repr(requests[1]))
             finally:

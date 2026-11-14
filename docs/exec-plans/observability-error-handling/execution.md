@@ -53,15 +53,15 @@
 
 ## M3：故障链可解释且不改变执行策略
 
-### Batch 04：工具拒绝与派发后故障
+### Batch 04：工具拒绝与派发后故障（已完成，2026-11-14）
 
 通过已接通的动作链覆盖框架校验、BrowserRejected、派发异常、取图异常及新窗口。框架在 ActionToolset 前拒绝的未知工具／类型／参数问题也要有调用及拒绝材料，不通过复制框架校验实现。
 
 完成条件：预检拒绝能被模型纠正且 action_count 不增；派发后故障计数保留、运行停止、无动作重放和无后续验收；截图失败仍保留最后成功观察。每种情况的错误或拒绝原因可从本地与受控线上事实定位。
 
-验证入口：`test_agent_click.py`、`test_agent_login.py`、`test_agent_observation.py`、`test_session_lifecycle.py` 和新增拒绝／诊断关联测试。
+验证入口：`test_agent_click.py`、`test_agent_login.py`、`test_agent_observation.py`、`test_session_lifecycle.py` 和 `test_failure_observability.py`。
 
-### Batch 05：模型、验收与流中断诊断
+### Batch 05：模型、验收与流中断诊断（已完成，2026-11-14）
 
 沿真实模型适配、原生框架和 `src/uiprobe/verification.py` 接入失败材料。使用受控响应复现非标准成功响应、流中断、验收格式纠正耗尽和原生预算耗尽，不调用真实服务故意制造失败。
 
@@ -69,15 +69,15 @@
 
 完成条件：错误摘要和完整诊断可关联；没有半份工具执行或伪造 Submission；SDK 原生重试保持原归属，执行与验收输入仍隔离。
 
-验证入口：`test_model_service.py`、`test_verification.py`、`test_agent_budget.py` 及新增流中断观测测试。
+验证入口：`test_model_service.py`、`test_verification.py`、`test_agent_budget.py` 及 `test_failure_observability.py`。
 
-### Batch 06：在线故障隔离与退出状态
+### Batch 06：在线故障隔离与退出状态（已完成，2026-11-14）
 
 覆盖应用级观测配置、初始化、SDK 导出、可见的队列丢弃／提交失败与 flush。只测试 SDK 实际可见的结果，不能要求库报告不存在的成功确认。落实观测不完整的结果表达及独立等待时限，并同步 owning design；原有本地写入失败语义不变。
 
 完成条件：真实本地页面的零动作／正常结果在在线故障下仍保持原值，本地诊断和可见告警可查；入队、flush 完成和远端状态不可知被准确区分；不远端逐条查询、不无限等待、不递归追踪导出请求。
 
-验证入口：新增可控 exporter 失败／阻塞／flush 测试，复用 `test_session_zero_action.py` 与 `test_mvp_e2e.py` 的应用入口。
+验证入口：`test_export_failures.py`、`test_failure_observability.py` 的可控 exporter 失败／阻塞／flush 测试，复用 `test_session_zero_action.py` 与 `test_mvp_e2e.py` 的应用入口。
 
 ## M4：跨阶段收尾与真实演示验收
 

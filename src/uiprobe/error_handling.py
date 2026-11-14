@@ -42,6 +42,11 @@ class LocatedFailure(Exception):
 def describe(exc: BaseException, phase: str, operation: str, code: str, message: str):
     if isinstance(exc, LocatedFailure):
         return exc.summary, exc.diagnostic
+    if getattr(exc, "uiprobe_failure", None) is not None:
+        return getattr(exc, "uiprobe_failure")
+    partial = getattr(exc, "uiprobe_partial_output", None)
+    if partial is not None:
+        operation, code = "request_stream", "model_stream_incomplete"
     summary = SessionError(phase, code, message, operation)
     diagnostic = {
         **summary.__dict__,
@@ -49,6 +54,8 @@ def describe(exc: BaseException, phase: str, operation: str, code: str, message:
         "exception_message": str(exc),
         "traceback": "".join(traceback.format_exception(exc)),
     }
+    if partial is not None:
+        diagnostic.update(incomplete=True, partial_output=partial)
     return summary, diagnostic
 
 
@@ -65,3 +72,16 @@ def locate(phase: str, operation: str, code: str, message: str):
             f"{message}: {str(exc).splitlines()[0]}" if str(exc) else message,
         )
         raise LocatedFailure(summary, diagnostic) from exc
+
+
+def model_failure_code(exc: BaseException) -> str:
+    """Classify native failures without guessing from exception messages."""
+    from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
+
+    if isinstance(exc, TimeoutError):
+        return "deadline_exhausted"
+    if isinstance(exc, UsageLimitExceeded):
+        return "model_budget_exhausted"
+    if isinstance(exc, UnexpectedModelBehavior):
+        return "model_output_invalid"
+    return "model_request_failed"

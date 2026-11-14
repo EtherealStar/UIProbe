@@ -9,13 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx2 as httpx
-
+from stream_fixtures import streamed_completion
 from trace_fixtures import CapturingExporter
-from uiprobe.observability import run_trace
 
 from uiprobe.__main__ import main, run_application
 from uiprobe.browser import Browser
 from uiprobe.model_service import ModelService, ModelServiceConfig
+from uiprobe.observability import run_trace
 from uiprobe.session import SessionResult
 
 
@@ -74,6 +74,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                         def respond(request):
                             body = json.loads(request.content)
                             requests.append(body)
+                            self.assertIs(body["stream"], True)
                             verification = any(
                                 t["function"]["name"] == "final_result"
                                 for t in body.get("tools", [])
@@ -111,9 +112,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                                         }
                                     ],
                                 }
-                            return httpx.Response(
-                                200,
-                                json={
+                            return streamed_completion(
+                                {
                                     "id": "r",
                                     "object": "chat.completion",
                                     "created": 1,
@@ -125,7 +125,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                                             "finish_reason": "stop",
                                         }
                                     ],
-                                },
+                                }
                             )
 
                         async with ModelService(
@@ -176,12 +176,13 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
                             browser = ObservedBrowser()
                             exporter = CapturingExporter()
-                            with run_trace(exporter), patch("uiprobe.session.Browser", return_value=browser):
-                                exporter = CapturingExporter()
-                                with run_trace(exporter):
-                                    result = await run_application(
-                                        json.dumps(case), cfg, service
-                                    )
+                            with (
+                                run_trace(exporter),
+                                patch("uiprobe.session.Browser", return_value=browser),
+                            ):
+                                result = await run_application(
+                                    json.dumps(case), cfg, service
+                                )
                             self.assertEqual(browser.final_text, "Home")
                             self.assertEqual(result.status, status, result.errors)
                             self.assertEqual(result.action_count, 5)

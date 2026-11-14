@@ -29,9 +29,7 @@ async def run_application(
 
 
 @traced("startup")
-async def run_files(
-    case_path: Path, config_path: Path
-) -> SessionResult:
+async def run_files(case_path: Path, config_path: Path) -> SessionResult:
     config = None
     operation = "read_config"
     try:

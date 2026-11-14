@@ -10,7 +10,8 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
 from .case_input import StrictValue, TestCase
-from .observability import instrumentation, traced
+from .error_handling import describe, model_failure_code
+from .observability import fact, instrumentation, traced
 from .observation import AssertionResult, Screenshot, Status, Verdict
 from .recording import SessionRecord
 
@@ -98,10 +99,13 @@ class Verification:
             return output
 
         record.save_verification_input(test_case, screenshot)
-        reason = "Visual verification unavailable"
+        operation = "check_evidence"
         try:
             if screenshot is None or deadline_at <= time.monotonic():
-                raise TimeoutError
+                if screenshot is None:
+                    raise ValueError("Verification evidence screenshot is missing")
+                raise TimeoutError("Verification deadline exhausted")
+            operation = "evaluate_assertions"
             async with asyncio.timeout_at(deadline_at):
                 result = await agent.run(
                     [
@@ -123,7 +127,18 @@ class Verification:
             ]
         except VerificationRecordingError:
             raise
-        except Exception:
+        except Exception as exc:
+            error, diagnostic = describe(
+                exc,
+                "verification",
+                operation,
+                "evidence_missing" if screenshot is None else model_failure_code(exc),
+                f"Visual verification system failed ({type(exc).__name__})",
+            )
+            fact("diagnostic", **diagnostic)
+            record.save_diagnostic(diagnostic)
+            record.append({"type": "verification_error", **error.__dict__})
+            reason = f"{error.message}; error_id={error.error_id}"
             assertions = [
                 AssertionResult(
                     a.id,

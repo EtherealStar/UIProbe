@@ -40,10 +40,17 @@ class SessionRecord:
         with (self.directory / "events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=False) + chr(10))
 
-    def save_trace(self, spans, warnings):
+    def save_trace(self, spans, warnings, export_status=None, diagnostics=()):
         (self.directory / "trace.json").write_text(
             json.dumps(
-                {"trace_id": self.trace_id, "spans": spans, "warnings": warnings},
+                {
+                    "trace_id": self.trace_id,
+                    "spans": spans,
+                    "warnings": warnings,
+                    "export": export_status,
+                    "observability_diagnostics": diagnostics,
+                    "observability_incomplete": bool(warnings),
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",

@@ -22,7 +22,9 @@ class Browser:
         viewport_width: int = 1280,
         viewport_height: int = 720,
         device_scale_factor: float = 1,
+        headless: bool = True,
     ):
+        self.headless = headless
         self.scale = device_scale_factor
         self.width = viewport_width
         self.height = viewport_height
