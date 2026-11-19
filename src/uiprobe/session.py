@@ -1,6 +1,7 @@
 """Run-local browser, execution and independent verification lifecycle."""
 
 import asyncio
+import sys
 from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -11,6 +12,12 @@ from .agent import Context
 from .browser import Browser
 from .case_input import PreparedCase, TestCase
 from .error_handling import RunError, describe, locate
+from .lifecycle import (
+    FINALIZATION_SECONDS,
+    close_within_deadline,
+    settle,
+    start_background_work,
+)
 from .observability import bind_record, fact, traced
 from .observation import (
     AssertionResult,
@@ -76,6 +83,9 @@ class Session:
             record = self.recorder.begin(
                 result.session_id, config.output_dir, suite_id=self.suite_id
             )
+        except asyncio.CancelledError as exc:
+            result.stop_reason = "cancelled"
+            raise SessionCancelled(result) from exc
         except OSError as exc:
             error, diagnostic = describe(
                 exc,
@@ -90,6 +100,30 @@ class Session:
             return result
         bind_record(record)
         verification_context = copy_context()
+        loop = asyncio.get_running_loop()
+        recording_failed: asyncio.Future[RunError] = loop.create_future()
+        execution_stopped_by_recording = False
+
+        def notify_recording_failure(error: RunError):
+            nonlocal execution_stopped_by_recording
+            if recording_failed.done():
+                return
+            recording_failed.set_result(error)
+            current_task = asyncio.current_task()
+            if (
+                execution is not current_task
+                and not execution.done()
+                and not execution.cancelling()
+            ):
+                execution_stopped_by_recording = True
+                execution.cancel()
+            for _, _, task in verifications:
+                if (
+                    task is not current_task
+                    and not task.done()
+                    and not task.cancelling()
+                ):
+                    task.cancel()
 
         verifications: list[
             tuple[CheckpointResult, SubmissionRecord, asyncio.Task[None]]
@@ -122,6 +156,7 @@ class Session:
                 candidate.save_input()
             with candidate.writing("append_submission"):
                 candidate.append({"type": "submission"})
+            candidate.on_write_failure = notify_recording_failure
             task = asyncio.create_task(
                 verify(entry, candidate), context=verification_context.copy()
             )
@@ -161,20 +196,22 @@ class Session:
             diagnostics.append(diagnostic)
             return error
 
-        async def close_browser():
+        def start_browser_close():
             if browser is None:
-                return
-            try:
-                async with asyncio.timeout(5):
-                    await browser.close()
-            except Exception as exc:
-                add_failure(
-                    exc,
-                    "cleanup",
-                    "close_browser",
-                    "close_failed",
-                    "Cannot close browser",
-                )
+                return None
+            return asyncio.create_task(
+                close_within_deadline(browser.close(), FINALIZATION_SECONDS)
+            )
+
+        def execution_operation():
+            if phase == "execution":
+                return "execute_agent"
+            current_operation = getattr(browser, "initialization_operation", None)
+            return (
+                current_operation
+                if isinstance(current_operation, str)
+                else "open_browser"
+            )
 
         def finish_verification_error(
             entry: CheckpointResult, evidence: CheckpointSubmission, reason: str
@@ -192,9 +229,9 @@ class Session:
             evidence = candidate.submission
             try:
                 assert self.verification is not None
-                async with asyncio.timeout_at(deadline), verification_slots:
-                    if asyncio.get_running_loop().time() >= deadline:
-                        raise TimeoutError
+                async with verification_slots:
+                    if recording_failed.done() or loop.time() >= deadline:
+                        return
                     entry.state = "running"
                     with candidate.writing("append_verification_started"):
                         candidate.append({"type": "verification_started"})
@@ -235,8 +272,9 @@ class Session:
                             }
                         )
 
-        try:
-            async with asyncio.timeout_at(deadline):
+        async def execute():
+            nonlocal browser, context, started_record, phase
+            try:
                 with locate(
                     "recording",
                     "append_events",
@@ -251,6 +289,8 @@ class Session:
                 state = await browser.open(
                     config.entry_url, config.data_values, deadline
                 )
+                if loop.time() >= deadline:
+                    raise TimeoutError
                 with locate(
                     "recording",
                     "save_initial_screenshot",
@@ -279,32 +319,125 @@ class Session:
                     if all(item.submission_id for item in result.checkpoints)
                     else "execution_incomplete"
                 )
-        except asyncio.CancelledError:
-            cancelled = True
-            result.stop_reason = "cancelled"
-        except Exception as exc:
-            operation = "execute_agent"
-            if phase == "initialization":
-                current_operation = getattr(browser, "initialization_operation", None)
-                operation = (
-                    current_operation
-                    if isinstance(current_operation, str)
-                    else "open_browser"
+            except Exception as exc:
+                error = add_failure(
+                    exc,
+                    phase,
+                    execution_operation(),
+                    "deadline_exhausted"
+                    if isinstance(exc, TimeoutError)
+                    else "run_failed",
+                    "Session operation failed",
                 )
-            error = add_failure(
-                exc,
-                phase,
-                operation,
-                "deadline_exhausted" if isinstance(exc, TimeoutError) else "run_failed",
-                "Session operation failed",
+                if error.phase == "recording":
+                    notify_recording_failure(error)
+                result.stop_reason = (
+                    "deadline_exhausted"
+                    if isinstance(exc, TimeoutError)
+                    else "recording_error"
+                    if error.phase == "recording"
+                    else phase + "_error"
+                )
+            finally:
+                if record.failures:
+                    notify_recording_failure(record.failures[0][0])
+
+        def mark_cancelled(_exc: asyncio.CancelledError):
+            nonlocal cancelled
+            cancelled = True
+            if (
+                result.execution_outcome is None
+                and not result.errors
+                and not recording_failed.done()
+                and result.stop_reason != "deadline_exhausted"
+            ):
+                result.stop_reason = "cancelled"
+
+        async def wait_for_business(tasks: list[asyncio.Task[None]]):
+            pending: set[asyncio.Future] = {task for task in tasks if not task.done()}
+            while pending and not recording_failed.done() and loop.time() < deadline:
+                _, pending = await asyncio.wait(
+                    pending | {recording_failed},
+                    timeout=deadline - loop.time(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                pending.discard(recording_failed)
+
+        execution = asyncio.create_task(execute())
+        closing = None
+        try:
+            await wait_for_business([execution])
+            if execution.done():
+                if not execution_stopped_by_recording:
+                    execution.result()
+                closing = start_browser_close()
+                await wait_for_business([task for _, _, task in verifications])
+        except asyncio.CancelledError as exc:
+            mark_cancelled(exc)
+
+        recording_failure = (
+            recording_failed.result() if recording_failed.done() else None
+        )
+        execution_pending = not execution.done()
+        deadline_reached = (
+            not cancelled
+            and recording_failure is None
+            and (
+                execution_pending
+                or any(entry.verdict is None for entry, _, _ in verifications)
             )
-            result.stop_reason = (
-                "deadline_exhausted"
-                if isinstance(exc, TimeoutError)
-                else "recording_error"
-                if error.phase == "recording"
-                else phase + "_error"
+        )
+        if recording_failure is not None and (
+            execution_stopped_by_recording or execution_pending
+        ):
+            result.stop_reason = "recording_error"
+        elif deadline_reached and execution_pending:
+            result.stop_reason = "deadline_exhausted"
+
+        tasks = [execution, *(task for _, _, task in verifications)]
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        await settle(asyncio.gather(*tasks, return_exceptions=True), mark_cancelled)
+        if closing is None:
+            closing = start_browser_close()
+        if closing is not None:
+            try:
+                await settle(closing, mark_cancelled)
+            except asyncio.CancelledError as exc:
+                mark_cancelled(exc)
+            except Exception as exc:
+                add_failure(
+                    exc,
+                    "cleanup",
+                    "close_browser",
+                    "close_failed",
+                    "Cannot close browser",
+                )
+
+        deadline_failure = None
+        if deadline_reached and (
+            execution_pending
+            or any(entry.verdict is None for entry, _, _ in verifications)
+        ):
+            deadline_failure = next(
+                (
+                    error
+                    for error in result.errors
+                    if error.code == "deadline_exhausted"
+                ),
+                None,
             )
+            if deadline_failure is None:
+                deadline_failure = add_failure(
+                    TimeoutError("Session deadline exhausted"),
+                    phase if execution_pending else "verification",
+                    execution_operation()
+                    if execution_pending
+                    else "evaluate_assertions",
+                    "deadline_exhausted",
+                    "Session deadline exhausted",
+                )
 
         result.action_count = budget.action_count
         if context is not None:
@@ -316,37 +449,12 @@ class Session:
                 and current_entry.checkpoint_id == context.checkpoint.id
             ):
                 current_entry.state = "not_submitted"
-        closing = asyncio.create_task(close_browser())
-        tasks = [task for _, _, task in verifications]
-        recording_failure = next(
-            (
-                error
-                for error in [*result.errors, *(error for error, _ in record.failures)]
-                if error.phase == "recording"
-            ),
-            None,
-        )
-        if cancelled or recording_failure is not None:
-            for task in tasks:
-                task.cancel()
-        try:
-            await asyncio.gather(
-                *tasks, return_exceptions=cancelled or recording_failure is not None
-            )
-            await asyncio.shield(closing)
-        except asyncio.CancelledError:
-            cancelled = True
-            if result.stop_reason != "execution_completed":
-                result.stop_reason = "cancelled"
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await asyncio.shield(closing)
         for entry, submission_record, _ in verifications:
             if entry.verdict is None:
                 reason = "Session cancelled"
-                if recording_failure is not None and not cancelled:
-                    reason = f"{recording_failure.message}; error_id={recording_failure.error_id}"
+                failure = recording_failure or deadline_failure
+                if failure is not None:
+                    reason = f"{failure.message}; error_id={failure.error_id}"
                 finish_verification_error(entry, submission_record.submission, reason)
                 entry.state = "finished"
             for error, diagnostic in submission_record.failures:
@@ -362,6 +470,17 @@ class Session:
             if not any(item.error_id == error.error_id for item in result.errors):
                 result.errors.append(error)
                 diagnostics.append(diagnostic)
+        if recording_failure is not None:
+            # Preserve the cause of the stop ahead of failures during shutdown.
+            first_recording_error = next(
+                i for i, error in enumerate(result.errors) if error.phase == "recording"
+            )
+            primary = next(
+                i
+                for i, error in enumerate(result.errors)
+                if error.error_id == recording_failure.error_id
+            )
+            result.errors.insert(first_recording_error, result.errors.pop(primary))
         if (
             not cancelled
             and not result.errors
@@ -373,35 +492,37 @@ class Session:
             elif all(verdict and verdict.status == "passed" for verdict in verdicts):
                 result.status = "passed"
 
-        saving = asyncio.create_task(
-            asyncio.to_thread(
-                self._finish_record,
-                record,
-                deepcopy(result),
-                started_record,
-                tuple(diagnostics),
-            )
+        def mark_save_cancelled():
+            result.status = "error"
+            if result.stop_reason in ("execution_completed", "execution_incomplete"):
+                result.stop_reason = "cancelled"
+
+        def cancel_during_save(exc: asyncio.CancelledError):
+            mark_cancelled(exc)
+            mark_save_cancelled()
+
+        save_deadline = loop.time() + FINALIZATION_SECONDS
+        saved_cancellation = cancelled
+        saving = start_background_work(
+            self._finish_record,
+            record,
+            deepcopy(result),
+            started_record,
+            tuple(diagnostics),
         )
         try:
-            async with asyncio.timeout(5):
-                result = await asyncio.shield(saving)
-        except asyncio.CancelledError:
-            cancelled = True
-            result.status = "error"
-            result.stop_reason = "cancelled"
-            try:
-                async with asyncio.timeout(5):
-                    saved = await asyncio.shield(saving)
-                    saved.status = "error"
-                    saved.stop_reason = "cancelled"
-                    result = await asyncio.to_thread(
-                        self._finish_record, record, deepcopy(saved), True
-                    )
-            except (TimeoutError, asyncio.CancelledError):
-                pass
+            result = await settle(saving, cancel_during_save, deadline=save_deadline)
+            if cancelled and not saved_cancellation:
+                mark_save_cancelled()
+                saving = start_background_work(
+                    self._finish_record, record, deepcopy(result), None
+                )
+                result = await settle(
+                    saving, cancel_during_save, deadline=save_deadline
+                )
         except TimeoutError as exc:
             result.status = "error"
-            add_failure(
+            error = add_failure(
                 exc,
                 "recording",
                 "finalize_record",
@@ -409,6 +530,8 @@ class Session:
                 "Record finalization exceeded deadline",
             )
             result.artifact_paths = [str(record.directory)]
+            fact("diagnostic", **diagnostics[-1])
+            print(f"{error.message}; error_id={error.error_id}", file=sys.stderr)
         if cancelled:
             raise SessionCancelled(result)
         return result
@@ -416,8 +539,6 @@ class Session:
     @staticmethod
     def _finish_record(record, result, started_record, diagnostics=()):
         def failed(exc, operation, code, message):
-            import sys
-
             error, diagnostic = describe(exc, "recording", operation, code, message)
             result.errors.append(error)
             result.status = "error"
@@ -447,11 +568,14 @@ class Session:
                 )
                 break
         try:
-            if not started_record:
-                record.append({"type": "session_started"})
-            for error in result.errors:
-                record.append({"type": "error", **error.__dict__})
-            record.append({"type": "session_finished", "status": result.status})
+            if started_record is None:
+                record.append({"type": "session_cancelled", "status": result.status})
+            else:
+                if not started_record:
+                    record.append({"type": "session_started"})
+                for error in result.errors:
+                    record.append({"type": "error", **error.__dict__})
+                record.append({"type": "session_finished", "status": result.status})
         except OSError as exc:
             failed(exc, "append_events", "append_failed", "Cannot append record")
         try:

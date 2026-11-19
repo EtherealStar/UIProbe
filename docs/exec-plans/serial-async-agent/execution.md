@@ -1,6 +1,6 @@
 # Execution
 
-本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../.scratch/serial-async-agent/issues/)。01—06 已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
+本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../.scratch/serial-async-agent/issues/)。01—09 已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
 
 ## 票据与阻塞关系
 
@@ -12,12 +12,12 @@
 | 04（已完成） | 同一循环逐段提交并有界异步验收 | 02 | M3 |
 | 05（已完成） | 动作后提交与跨阶段预算正确生效 | 04 | M3 |
 | 06（已完成） | 执行和单项验收故障各自收敛 | 04 | M3 |
-| 07 | 后台记录故障主动停止当前及后续 Case | 03、04 | M4 |
-| 08 | 硬截止时间与取消快照跨批次收尾 | 03、04 | M4 |
-| 09 | 批次资源及追踪收尾故障归属正确 | 03 | M4 |
+| 07（已完成） | 后台记录故障主动停止当前及后续 Case | 03、04 | M4 |
+| 08（已完成） | 硬截止时间与取消快照跨批次收尾 | 03、04 | M4 |
+| 09（已完成） | 批次资源及追踪收尾故障归属正确 | 03 | M4 |
 | 10 | CLI 样例、组合回归与真实模型验收 | 05、06、07、08、09 | M5 |
 
-只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。当前可执行票据为 07、08 和 09；若并行开发不同切片，接口变更仍需先同步，不以同一源文件为理由伪造业务阻塞边。
+只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。当前可执行票据为 10。
 
 ## M1：隔离现有验收材料与追踪归属（已完成）
 
@@ -89,9 +89,9 @@
 
 验证：新增计划测试 `test_checkpoint_failures.py`，复用既有真实 Browser 故障和受控模型传输／格式输出 fixture，不用测试替身直接伪造最终 SessionResult。
 
-## M4：异步故障与批次收尾可信
+## M4：异步故障与批次收尾可信（已完成）
 
-### Batch 07：后台必要写入故障主动停机
+### Batch 07：后台必要写入故障主动停机（已完成）
 
 为 Session 增加私有故障通知及其等待路径，沿提交／验收专属记录传播必要写入失败；不能等执行结束再遍历 failures。故障可发生在输入、请求视图、响应、诊断、最终历史或提交登记，后台故障必须唤醒正在等待 execute 的 Session。
 
@@ -99,9 +99,9 @@
 
 完成标准：在执行模型请求被阻塞时注入后台保存失败，观察其被取消，没有后续模型／浏览器请求，无残留 queued／running／验收任务；已完成 passed 保留，Case 与 Suite 为 error，后条不启动。记录与清理也失败时仍保留主故障及可用路径。
 
-验证：新增计划测试 `test_async_recording_failure.py`，迁移并扩展 `test_combined_failures.py`、`test_export_failures.py` 的相应生产边界。
+验证：`test_async_recording_failure.py` 通过 SuiteRunner 和 Session 注入故障，`test_combined_failures.py` 覆盖二次写入失败，`test_suite_finalization.py` 覆盖在线导出故障后继续运行。
 
-### Batch 08：硬截止时间与取消快照交接
+### Batch 08：硬截止时间与取消快照交接（已完成）
 
 Session 启动才建立单调 deadline，覆盖初始化、执行、排队、验收；预检耗时不占任何 Case 时间。到期停止业务，排队任务可直接 finished／error；取消并等待已启动任务，清理与保存沿用独立短时限。
 
@@ -109,9 +109,9 @@ Session 启动才建立单调 deadline，覆盖初始化、执行、排队、验
 
 完成标准：提交、排队或执行退出均不延长 deadline；到期无新请求；取消不正常返回、已有证据不丢失；最终结果不留活动状态或业务任务；保存线程只处理独立快照，迟到完成不修改已交付对象。重复取消下仍不吞取消或无限等待。
 
-验证：新增计划测试 `test_async_lifecycle.py`；迁移现有 `test_session_lifecycle.py` 和取消组合回归。用阻塞点和可控限时证明边界，保留真实 Browser 释放断言。
+验证：`test_async_lifecycle.py` 和 `test_session_lifecycle.py` 使用阻塞点及可控限时验证排队、资源关闭、保存与重复取消；`test_combined_failures.py` 保留真实 Browser 释放断言。
 
-### Batch 09：批次资源、追踪与最终保存故障
+### Batch 09：批次资源、追踪与最终保存故障（已完成）
 
 沿 SuiteRunner 注入的共享资源创建能力验证创建失败、关闭异常及关闭超时。批次错误保存在 Suite；已结束 Case 的结果、stop_reason、Verdict 和文件不被回写。批次 root 覆盖读取、准备、Session、共享关闭，之后导出并保存唯一 trace，最后保存 SuiteResult。
 
@@ -119,7 +119,7 @@ Session 启动才建立单调 deadline，覆盖初始化、执行、排队、验
 
 完成标准：正常 Session 在共享关闭／批次保存失败后仍保持原状态；Suite error，最后输出已经含批次故障；在线失败不改变业务结果；2.5 秒出口等待及五秒保存／资源关闭等待有界，迟到线程不改终态快照。
 
-验证：新增计划测试 `test_suite_finalization.py`，迁移 `test_observability.py`、`test_initialization_diagnostics.py`、`test_combined_failures.py` 和导出故障回归。
+验证：`test_suite_runner.py` 使用真实本地 Chromium 和 HTTP OTLP 接收端验证跨 Case 关联及载荷；`test_suite_finalization.py`、`test_combined_failures.py`、`test_initialization_diagnostics.py` 和 `test_export_failures.py` 验证故障归属及收尾限制。
 
 ## M5：命令行交付与真实模型证据齐备
 
@@ -133,7 +133,7 @@ Session 启动才建立单调 deadline，覆盖初始化、执行、排队、验
 
 ## 验证命令
 
-以下 test_* 文件除已明确标为现有者外均为计划新增；对应批次必须创建并确认实际发现非零测试，不能把尚无文件的零发现记作通过。逐批运行上文对应文件，例如：
+按批次运行对应测试文件，并确认实际发现并运行了预期测试。例如：
 
 ~~~bash
 uv run python -m unittest discover -s tests -p 'test_submission_records.py' -v

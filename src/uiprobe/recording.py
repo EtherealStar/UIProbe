@@ -2,6 +2,7 @@
 
 import json
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ def _writing(
     *,
     defer: bool = False,
     association: dict | None = None,
+    notify: Callable[[RunError], None] | None = None,
 ):
     """Keep a primary exception while collecting failures of its evidence writes."""
     primary = sys.exception()
@@ -36,6 +38,8 @@ def _writing(
         )
         if association is not None:
             diagnostic.update(association)
+        if notify is not None:
+            notify(error)
         if primary is None and not defer:
             raise LocatedFailure(error, diagnostic) from exc
         failures.append((error, diagnostic))
@@ -91,7 +95,7 @@ class RunRecord:
         return [
             str(path)
             for path in sorted(self.directory.iterdir())
-            if path.name != ".result.tmp"
+            if path.name not in (".result.tmp", ".trace.tmp")
         ]
 
     def append(self, event: dict) -> None:
@@ -104,7 +108,8 @@ class RunRecord:
         _append_json(self.directory / "events.jsonl", payload)
 
     def save_trace(self, spans, warnings, export_status=None, diagnostics=()):
-        (self.directory / "trace.json").write_text(
+        self._write_atomically(
+            "trace",
             json.dumps(
                 {
                     "trace_id": self.trace_id,
@@ -116,40 +121,53 @@ class RunRecord:
                 },
                 ensure_ascii=False,
             ),
-            encoding="utf-8",
         )
 
     def save_diagnostic(self, diagnostic: dict) -> None:
         directory = self.directory / "diagnostics"
         directory.mkdir(exist_ok=True)
         (directory / f"{diagnostic['error_id']}.json").write_text(
-            json.dumps(diagnostic, ensure_ascii=False), encoding="utf-8"
+            json.dumps({**diagnostic, **self.association}, ensure_ascii=False),
+            encoding="utf-8",
         )
 
     def save_result(self, result) -> list[str]:
-        paths = self.artifact_paths + [str(self.directory / "result.json")]
+        destination = self.directory / "result.json"
+        paths = [path for path in self.artifact_paths if path != str(destination)]
+        paths.append(str(destination))
         payload = asdict(result)
         payload["artifact_paths"] = paths
-        temporary = self.directory / ".result.tmp"
+        self._write_atomically(
+            "result",
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                default=lambda value: value.model_dump(),
+            ),
+        )
+        return paths
+
+    def _write_atomically(self, name: str, data: str) -> None:
+        temporary = self.directory / f".{name}.tmp"
         try:
-            temporary.write_text(
-                json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    default=lambda value: value.model_dump(),
-                ),
-                encoding="utf-8",
-            )
-            temporary.replace(self.directory / "result.json")
+            temporary.write_text(data, encoding="utf-8")
+            temporary.replace(self.directory / f"{name}.json")
         finally:
             temporary.unlink(missing_ok=True)
-        return paths
 
 
 class SuiteRecord(RunRecord):
     def __init__(self, suite_id: str, directory: Path):
         super().__init__(directory, {"suite_id": suite_id})
         self.suite_id = suite_id
+        self.trace_save_confirmed = False
+
+    @property
+    def artifact_paths(self) -> list[str]:
+        paths = super().artifact_paths
+        if self.trace_save_confirmed:
+            return paths
+        return [path for path in paths if Path(path).name != "trace.json"]
 
 
 class SessionRecord(RunRecord):
@@ -162,7 +180,12 @@ class SessionRecord(RunRecord):
         self.session_id = session_id
 
     def writing(self, operation: str, *, defer: bool = False):
-        return _writing(self.failures, operation, defer=defer)
+        return _writing(
+            self.failures,
+            operation,
+            defer=defer,
+            association=self.association,
+        )
 
     def begin_submission(self, submission: CheckpointSubmission) -> "SubmissionRecord":
         if submission.session_id != self.session_id:
@@ -202,6 +225,7 @@ class SubmissionRecord:
         self._input_saved = False
         self.directory = session.directory / "submissions" / submission.submission_id
         self.failures: list[tuple[RunError, dict]] = []
+        self.on_write_failure: Callable[[RunError], None] | None = None
 
     @property
     def submission(self) -> CheckpointSubmission:
@@ -222,7 +246,11 @@ class SubmissionRecord:
 
     def writing(self, operation: str, *, defer: bool = False):
         return _writing(
-            self.failures, operation, defer=defer, association=self.association
+            self.failures,
+            operation,
+            defer=defer,
+            association=self.association,
+            notify=self.on_write_failure,
         )
 
     def append(self, event: dict) -> None:

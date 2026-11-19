@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 
 from pydantic import Field, field_validator
 from pydantic_ai import Agent, BinaryContent, ModelRetry, RunContext
@@ -86,6 +85,8 @@ class Verification:
             save(messages)
             with record.writing("save_verification_requests"):
                 record.save_sent_messages(messages)
+            if asyncio.get_running_loop().time() >= deadline_at:
+                raise TimeoutError
             return messages
 
         async def after_response(ctx, *, request_context, response):
@@ -122,7 +123,7 @@ class Verification:
             record.save_input()
         operation = "check_evidence"
         try:
-            if screenshot is None or deadline_at <= time.monotonic():
+            if screenshot is None or deadline_at <= asyncio.get_running_loop().time():
                 if screenshot is None:
                     raise ValueError("Verification evidence screenshot is missing")
                 raise TimeoutError("Verification deadline exhausted")

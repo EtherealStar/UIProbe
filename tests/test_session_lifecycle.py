@@ -10,7 +10,7 @@ from input_fixtures import config, prepared_case
 
 from uiprobe.observation import BrowserState, Screenshot, Verdict
 from uiprobe.recording import Recorder, SessionRecord
-from uiprobe.session import Session
+from uiprobe.session import Session, SessionCancelled
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -283,6 +283,16 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(
                     any(p.endswith("result.json") for p in result.artifact_paths)
                 )
+                trace = json.loads(
+                    Path(directory, result.session_id, "trace.json").read_text()
+                )
+                diagnostics = [
+                    event["attributes"]["error_id"]
+                    for span in trace["spans"]
+                    for event in span["events"]
+                    if event["name"] == "diagnostic"
+                ]
+                self.assertIn(result.errors[-1].error_id, diagnostics)
                 browser.close.assert_awaited_once()
             finally:
                 release.set()
@@ -328,11 +338,23 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 task.cancel()
+                await asyncio.sleep(0)
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
             finally:
                 release.set()
-            with self.assertRaises(asyncio.CancelledError):
+            with self.assertRaises(SessionCancelled) as cancellation:
                 await task
-            saved = json.loads(next(Path(directory).glob("*/result.json")).read_text())
+            self.assertEqual(cancellation.exception.result.stop_reason, "cancelled")
+            path = next(Path(directory).glob("*/result.json"))
+            saved = json.loads(path.read_text())
             self.assertEqual(saved["stop_reason"], "cancelled")
             self.assertEqual(saved["status"], "error")
             self.assertEqual(saved["checkpoints"][0]["verdict"]["status"], "passed")
+            events = [
+                json.loads(line)
+                for line in path.with_name("events.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual([e["type"] for e in events].count("session_finished"), 1)
+            self.assertEqual(events[-1]["type"], "session_cancelled")

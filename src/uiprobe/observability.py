@@ -141,15 +141,49 @@ class RunTrace:
         self.warnings.append(f"{message}; error_id={summary.error_id}")
         self.diagnostics.append(diagnostic)
 
+    def finish_export(self):
+        outcome = []
+
+        def flush():
+            try:
+                flushed = self.provider.force_flush()
+                outcome.append("completed" if flushed else "failed")
+                if not flushed:
+                    self.warn("flush", "Online flush failed; remote delivery unknown")
+            except Exception as exc:
+                outcome.append("failed")
+                self.warn("flush", "Online flush failed", exc)
+            finally:
+                try:
+                    self.provider.shutdown()
+                except Exception as exc:
+                    outcome[:] = ["failed"]
+                    self.warn("shutdown_export", "Online exporter shutdown failed", exc)
+
+        worker = threading.Thread(target=flush, daemon=True)
+        worker.start()
+        worker.join(2.5)
+        if self.export_status["enabled"]:
+            if worker.is_alive():
+                self.export_status["flush"] = "timed_out"
+                self.warn("flush", "Online flush incomplete; remote delivery unknown")
+            else:
+                self.export_status["flush"] = outcome[0] if outcome else "failed"
+        for warning in self.warnings:
+            print(warning, file=sys.stderr)
+
     def save(self):
         if self.record is not None:
             self.record.save_trace(
-                self.local.spans, self.warnings, self.export_status, self.diagnostics
+                list(self.local.spans),
+                list(self.warnings),
+                self.export_status.copy(),
+                list(self.diagnostics),
             )
 
 
 @contextmanager
-def run_trace(exporter=None, *, independent=False):
+def run_trace(exporter=None, *, independent=False, defer_finalization=False):
     existing = _current.get()
     if existing is not None and not independent:
         yield existing
@@ -173,49 +207,16 @@ def run_trace(exporter=None, *, independent=False):
             yield scope
     finally:
         try:
-            outcome = []
-
-            def flush():
+            if not defer_finalization:
+                scope.finish_export()
                 try:
-                    flushed = scope.provider.force_flush()
-                    outcome.append("completed" if flushed else "failed")
-                    if not flushed:
-                        scope.warn(
-                            "flush", "Online flush failed; remote delivery unknown"
-                        )
-                except Exception as exc:
-                    outcome.append("failed")
-                    scope.warn("flush", "Online flush failed", exc)
-                finally:
-                    try:
-                        scope.provider.shutdown()
-                    except Exception as exc:
-                        outcome[:] = ["failed"]
-                        scope.warn(
-                            "shutdown_export", "Online exporter shutdown failed", exc
-                        )
-
-            worker = threading.Thread(target=flush, daemon=True)
-            worker.start()
-            worker.join(2.5)
-            if scope.export_status["enabled"]:
-                if worker.is_alive():
-                    scope.export_status["flush"] = "timed_out"
-                    scope.warn(
-                        "flush", "Online flush incomplete; remote delivery unknown"
+                    scope.save()
+                except OSError as exc:
+                    scope.local_error = exc
+                    print(
+                        f"Cannot finalize local trace: {type(exc).__name__}",
+                        file=sys.stderr,
                     )
-                else:
-                    scope.export_status["flush"] = outcome[0]
-            for warning in scope.warnings:
-                print(warning, file=sys.stderr)
-            try:
-                scope.save()
-            except OSError as exc:
-                scope.local_error = exc
-                print(
-                    f"Cannot finalize local trace: {type(exc).__name__}",
-                    file=sys.stderr,
-                )
         finally:
             logger.removeHandler(handler)
             _current.reset(token)

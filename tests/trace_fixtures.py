@@ -9,7 +9,7 @@ class CapturingExporter(SpanExporter):
         self.payloads = []
         self.spans = []
 
-    def export(self, spans):
+    def export(self, spans) -> SpanExportResult:
         self.spans.extend(spans)
         self.payloads.append(encode_spans(spans).SerializeToString())
         return SpanExportResult.SUCCESS

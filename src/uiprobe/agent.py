@@ -200,6 +200,8 @@ class ExecutionAgent:
             view[-2 if only_submit else -1] = observation
             with record.writing("save_execution_requests"):
                 record.save_sent_messages(view, state.screenshot)
+            if asyncio.get_running_loop().time() >= deadline_at:
+                raise TimeoutError
             seen = len(view)
             return view
 

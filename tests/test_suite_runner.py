@@ -11,6 +11,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx2 as httpx
 from input_fixtures import case, config
 from openai import AsyncOpenAI
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
 from stream_fixtures import streamed_completion
@@ -26,21 +30,35 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_serial_cases_use_isolated_pages_and_shared_model_connection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            payloads = []
+
+            class PageAndCollector(http.server.SimpleHTTPRequestHandler):
+                def do_POST(self):
+                    if self.path != "/api/public/otel/v1/traces":
+                        self.send_error(404)
+                        return
+                    payloads.append(
+                        self.rfile.read(int(self.headers["Content-Length"]))
+                    )
+                    self.send_response(200)
+                    self.end_headers()
+
             for filename in ("override", "default"):
                 (root / f"{filename}.html").write_text(
                     '<input type="password" style="position:absolute;left:10px;top:10px">'
                 )
             server = http.server.ThreadingHTTPServer(
                 ("127.0.0.1", 0),
-                functools.partial(
-                    http.server.SimpleHTTPRequestHandler, directory=directory
-                ),
+                functools.partial(PageAndCollector, directory=directory),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.server_close)
             self.addAsyncCleanup(asyncio.to_thread, server.shutdown)
             base_url = f"http://127.0.0.1:{server.server_port}"
+            exporter = OTLPSpanExporter(
+                endpoint=f"{base_url}/api/public/otel/v1/traces", timeout=1
+            )
             defaults = config(directory)
             defaults["entry_url"] = f"{base_url}/default.html"
             defaults["max_actions"] = 2
@@ -49,6 +67,7 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
             requests = []
             execution_steps: dict[int, int] = {}
             first_verification = asyncio.Event()
+            first_execution_finished = asyncio.Event()
             release_verification = asyncio.Event()
 
             class ObservedBrowser(Browser):
@@ -122,6 +141,8 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
                         step = stages[step_number]
                     else:
                         self.assertEqual(name_list, [])
+                        if case_number == 1:
+                            first_execution_finished.set()
                         last_tool = max(
                             i
                             for i, item in enumerate(messages)
@@ -153,6 +174,11 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
                         "object": "chat.completion",
                         "created": 1,
                         "model": "controlled",
+                        "usage": {
+                            "prompt_tokens": 31,
+                            "completion_tokens": 7,
+                            "total_tokens": 38,
+                        },
                         "choices": [
                             {"index": 0, "message": message, "finish_reason": "stop"}
                         ],
@@ -202,12 +228,13 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
             task = asyncio.create_task(
-                SuiteRunner(create_service, browser_factory=ObservedBrowser).run(
-                    source, cfg
-                )
+                SuiteRunner(
+                    create_service, browser_factory=ObservedBrowser, exporter=exporter
+                ).run(source, cfg)
             )
             try:
                 await asyncio.wait_for(first_verification.wait(), 10)
+                await asyncio.wait_for(first_execution_finished.wait(), 10)
                 self.assertEqual(opened, [f"{base_url}/override.html"])
                 self.assertFalse(service.client.is_closed())
             finally:
@@ -264,6 +291,77 @@ class SuiteRunnerTests(unittest.IsolatedAsyncioTestCase):
                     {span["attributes"]["suite_id"] for span in spans},
                     {result.suite_id},
                 )
+            online_spans = [
+                span
+                for payload in payloads
+                for resource in ExportTraceServiceRequest.FromString(
+                    payload
+                ).resource_spans
+                for scope in resource.scope_spans
+                for span in scope.spans
+            ]
+            self.assertEqual(
+                {span.trace_id.hex() for span in online_spans}, {trace["trace_id"]}
+            )
+            span_by_id = {span.span_id: span for span in online_spans}
+            attributes_by_id = {
+                span.span_id: {attr.key: attr.value for attr in span.attributes}
+                for span in online_spans
+            }
+
+            def owning_session(span):
+                while span.name != "session":
+                    span = span_by_id[span.parent_span_id]
+                return attributes_by_id[span.span_id]["session_id"].string_value
+
+            request_spans = [
+                span
+                for span in online_spans
+                if "gen_ai.operation.name" in attributes_by_id[span.span_id]
+                and attributes_by_id[span.span_id]["gen_ai.operation.name"].string_value
+                == "chat"
+            ]
+            self.assertEqual(len(request_spans), len(requests))
+            self.assertEqual(
+                len({span.span_id for span in request_spans}), len(requests)
+            )
+            for run in runs:
+                owned = [
+                    span
+                    for span in request_spans
+                    if owning_session(span) == run.session_id
+                ]
+                self.assertEqual(len(owned), 6)
+                self.assertTrue(
+                    all(
+                        attributes_by_id[span.span_id][
+                            "gen_ai.usage.input_tokens"
+                        ].int_value
+                        == 31
+                        for span in owned
+                    )
+                )
+                verification = next(
+                    span
+                    for span in online_spans
+                    if span.name == "verification"
+                    and owning_session(span) == run.session_id
+                )
+                attributes = attributes_by_id[verification.span_id]
+                self.assertEqual(attributes["checkpoint_id"].string_value, "home")
+                self.assertEqual(
+                    attributes["submission_id"].string_value,
+                    run.checkpoints[0].submission_id,
+                )
+                self.assertEqual(attributes["screenshot_id"].string_value, "screen-3")
+
+            online = b"".join(payloads)
+            self.assertIn(b"Execution finished", online)
+            self.assertIn(b"Observed page", online)
+            self.assertIn(result.cases[1].errors[0].error_id.encode(), online)
+            self.assertNotIn(b"data:image", online)
+            self.assertNotIn(b"iVBORw0KGgo", online)
+            self.assertNotIn(b"\x89PNG", online)
 
     async def test_public_error_retains_invalid_entries_without_allocating_resources(
         self,
