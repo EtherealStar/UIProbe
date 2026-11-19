@@ -4,14 +4,15 @@ import asyncio
 import json
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import test_session_lifecycle as lifecycle
-from agent_support import PLAN, calls
+from agent_support import PLAN, calls, finish_execution
+from input_fixtures import case, config, prepared_case
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
-from test_session_input import case, config
 from trace_fixtures import CapturingExporter
 
 from uiprobe.__main__ import run_files
@@ -19,8 +20,9 @@ from uiprobe.agent import ExecutionAgent
 from uiprobe.browser import Browser
 from uiprobe.model_service import ModelServiceConfig
 from uiprobe.observability import run_trace
-from uiprobe.recording import Recorder, SessionRecord, SubmissionRecord
+from uiprobe.recording import Recorder, SessionRecord, SubmissionRecord, SuiteRecord
 from uiprobe.session import Session
+from uiprobe.suite_runner import SuiteRunner
 from uiprobe.verification import Verification
 
 
@@ -42,7 +44,7 @@ def response(messages, info):
                 )
             ]
         )
-    return ModelResponse(parts=[TextPart("Done")])
+    return finish_execution(info)
 
 
 class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
@@ -80,9 +82,9 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 raise OSError("result unavailable")
 
         class BrokenRecorder(Recorder):
-            def begin(self, session_id, output_dir):
-                record = super().begin(session_id, output_dir)
-                return BrokenRecord(session_id, record.directory)
+            def begin(self, session_id, output_dir, *, suite_id=None):
+                record = super().begin(session_id, output_dir, suite_id=suite_id)
+                return BrokenRecord(session_id, record.directory, suite_id)
 
         steps = iter(
             [
@@ -100,11 +102,11 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 recorder=BrokenRecorder(),
                 agent=ExecutionAgent(FunctionModel(lambda m, i: next(steps))),
                 verification=verification,
-            ).run(json.dumps(case()), cfg)
+            ).run(prepared_case(cfg))
             self.assertEqual(result.stop_reason, "execution_error")
             self.assertEqual(result.action_count, 1)
             self.assertEqual(result.last_screenshot_id, "screen-1")
-            self.assertIsNone(result.submission)
+            self.assertIsNone(result.execution_outcome)
             verification.evaluate.assert_not_awaited()
             assert browser.browser is not None
             self.assertFalse(browser.browser.is_connected())
@@ -159,8 +161,8 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
             result = await Session(
                 agent=ExecutionAgent(FunctionModel(response)),
                 verification=Verification(FunctionModel(invalid)),
-            ).run(json.dumps(case()), cfg)
-            self.assertIsNotNone(result.submission)
+            ).run(prepared_case(cfg))
+            self.assertIsNotNone(result.execution_outcome)
             self.assertEqual(result.status, "error")
             self.assertEqual(result.errors[0].phase, "verification")
             self.assertEqual(result.errors[0].code, "model_request_failed")
@@ -172,7 +174,7 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                     "save_verification_history",
                 ],
             )
-            assert result.verdict is not None
+            assert result.checkpoints[0].verdict is not None
             diagnostic = json.loads(
                 (
                     Path(directory, result.session_id, "diagnostics")
@@ -180,9 +182,12 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 ).read_text()
             )
             self.assertIn(
-                result.errors[0].error_id, result.verdict.assertions[0].reason
+                result.errors[0].error_id,
+                result.checkpoints[0].verdict.assertions[0].reason,
             )
-            self.assertEqual(diagnostic["submission_id"], result.verdict.submission_id)
+            self.assertEqual(
+                diagnostic["submission_id"], result.checkpoints[0].verdict.submission_id
+            )
             self.assertTrue(all(Path(p).exists() for p in result.artifact_paths))
 
     async def test_application_close_failure_keeps_verdict_and_updates_snapshot(self):
@@ -194,7 +199,7 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 cfg = config(directory)
                 cfg["entry_url"] = self.url
                 config_path = Path(directory, "config.json")
-                config_path.write_text(json.dumps(cfg))
+                config_path.write_text(json.dumps({"defaults": cfg}))
                 case_path = Path(directory, "case.json")
                 case_path.write_text(json.dumps(case()))
                 service = AsyncMock()
@@ -206,19 +211,17 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                     async def close():
                         await asyncio.sleep(60)
 
-                    service.client.close.side_effect = close
+                    service.close.side_effect = close
                 else:
-                    service.client.close.side_effect = RuntimeError(
-                        "client close failed"
-                    )
-                original_finish = SessionRecord.finish
+                    service.close.side_effect = RuntimeError("client close failed")
+                original_finish = SuiteRecord.save_result
 
-                def finish(record, result, history):
+                def finish(record, result):
                     if failure == "save" and any(
                         e.operation == "close_model_client" for e in result.errors
                     ):
                         raise OSError("application snapshot unavailable")
-                    return original_finish(record, result, history)
+                    return original_finish(record, result)
 
                 exporter = CapturingExporter()
                 with (
@@ -228,24 +231,32 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     patch("uiprobe.__main__.ModelService", return_value=service),
                     patch(
-                        "uiprobe.__main__.model_from_client",
+                        "uiprobe.suite_runner.model_from_client",
                         return_value=FunctionModel(response),
                     ),
-                    patch.object(SessionRecord, "finish", finish),
-                    run_trace(exporter),
+                    patch.object(SuiteRecord, "save_result", finish),
+                    patch(
+                        "uiprobe.__main__.SuiteRunner",
+                        partial(SuiteRunner, exporter=exporter),
+                    ),
                 ):
                     result = await run_files(case_path, config_path)
                 self.assertEqual(result.status, "error")
-                self.assertEqual(result.stop_reason, "verification_completed")
-                assert result.verdict is not None and result.submission is not None
-                self.assertEqual(result.verdict.status, "passed")
-                self.assertEqual(result.submission.text, "Done")
-                self.assertEqual(result.action_count, 0)
-                self.assertEqual(result.last_screenshot_id, "screen-1")
+                session_result = result.cases[0].session_result
+                assert session_result is not None
+                self.assertEqual(session_result.stop_reason, "execution_completed")
+                assert (
+                    session_result.checkpoints[0].verdict is not None
+                    and session_result.execution_outcome is not None
+                )
+                self.assertEqual(session_result.checkpoints[0].verdict.status, "passed")
+                self.assertEqual(session_result.execution_outcome.text, "Done")
+                self.assertEqual(session_result.action_count, 0)
+                self.assertEqual(session_result.last_screenshot_id, "screen-1")
                 error = next(
                     e for e in result.errors if e.operation == "close_model_client"
                 )
-                run = Path(directory, result.session_id)
+                run = Path(directory, result.suite_id)
                 diagnostic = json.loads(
                     (run / "diagnostics" / f"{error.error_id}.json").read_text()
                 )
@@ -253,18 +264,18 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                     "TimeoutError" if failure == "timeout" else "client close failed",
                     diagnostic["traceback"],
                 )
-                snapshot = json.loads((run / "result.json").read_text())
                 if failure == "save":
-                    self.assertEqual(snapshot["status"], "passed")
+                    self.assertEqual(session_result.status, "passed")
                     self.assertNotIn(str(run / "result.json"), result.artifact_paths)
                 else:
+                    snapshot = json.loads((run / "result.json").read_text())
                     self.assertEqual(
                         snapshot["errors"], [e.__dict__ for e in result.errors]
                     )
                 trace = json.loads((run / "trace.json").read_text())
                 self.assertIn("model_client.close", {s["name"] for s in trace["spans"]})
                 self.assertIn(error.error_id.encode(), b"".join(exporter.payloads))
-                service.client.close.assert_awaited_once()
+                service.close.assert_awaited_once()
 
     async def test_deadline_and_cancel_do_not_start_verification(self):
         for cancel in (False, True):
@@ -289,7 +300,7 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                         browser_factory=lambda: browser,
                         agent=ExecutionAgent(FunctionModel(waiting)),
                         verification=verification,
-                    ).run(json.dumps(case()), cfg)
+                    ).run(prepared_case(cfg))
                 )
                 await asyncio.wait_for(entered.wait(), 5)
                 if cancel:
@@ -303,7 +314,7 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     result = await task
                     self.assertEqual(result.errors[0].code, "deadline_exhausted")
-                    self.assertIsNone(result.submission)
+                    self.assertIsNone(result.execution_outcome)
                 assert browser.browser is not None
                 self.assertFalse(browser.browser.is_connected())
                 verification.evaluate.assert_not_awaited()
@@ -330,11 +341,11 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
             result = await Session(
                 agent=ExecutionAgent(model),
                 verification=Verification(model),
-            ).run(json.dumps(case()), cfg)
+            ).run(prepared_case(cfg))
             self.assertEqual(result.status, "error")
-            self.assertEqual(result.stop_reason, "verification_completed")
-            assert result.verdict is not None
-            self.assertEqual(result.verdict.status, "passed")
+            self.assertEqual(result.stop_reason, "execution_completed")
+            assert result.checkpoints[0].verdict is not None
+            self.assertEqual(result.checkpoints[0].verdict.status, "passed")
             self.assertEqual(result.errors[0].operation, "save_verification_history")
 
     async def test_application_cancellation_survives_client_close_failure(self):
@@ -349,16 +360,14 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
             cfg = config(directory)
             cfg["entry_url"] = self.url
             config_path = Path(directory, "config.json")
-            config_path.write_text(json.dumps(cfg))
+            config_path.write_text(json.dumps({"defaults": cfg}))
             case_path = Path(directory, "case.json")
             case_path.write_text(json.dumps(case()))
             service = AsyncMock()
             service.config = ModelServiceConfig(
                 "http://controlled/v1", "test", "controlled"
             )
-            service.client.close.side_effect = RuntimeError(
-                "close during cancel failed"
-            )
+            service.close.side_effect = RuntimeError("close during cancel failed")
             exporter = CapturingExporter()
             with (
                 patch(
@@ -367,20 +376,24 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch("uiprobe.__main__.ModelService", return_value=service),
                 patch(
-                    "uiprobe.__main__.model_from_client",
+                    "uiprobe.suite_runner.model_from_client",
                     return_value=FunctionModel(waiting),
                 ),
-                run_trace(exporter),
+                patch(
+                    "uiprobe.__main__.SuiteRunner",
+                    partial(SuiteRunner, exporter=exporter),
+                ),
             ):
                 task = asyncio.create_task(run_files(case_path, config_path))
                 await asyncio.wait_for(entered.wait(), 5)
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
-            service.client.close.assert_awaited_once()
-            saved = json.loads(next(Path(directory).glob("*/result.json")).read_text())
+            service.close.assert_awaited_once()
+            suite_path = next(Path(directory).glob("*/trace.json")).parent
+            saved = json.loads((suite_path / "result.json").read_text())
             self.assertEqual(saved["stop_reason"], "cancelled")
-            self.assertIsNone(saved["submission"])
+            self.assertIsNone(saved["cases"][0]["session_result"]["execution_outcome"])
             self.assertIn(b"close_model_client", b"".join(exporter.payloads))
             trace = json.loads(next(Path(directory).glob("*/trace.json")).read_text())
             self.assertIn("model_client.close", {s["name"] for s in trace["spans"]})

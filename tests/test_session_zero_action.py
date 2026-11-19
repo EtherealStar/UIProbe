@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 
 import httpx2 as httpx
+from input_fixtures import config, prepared_case
 from openai import AsyncOpenAI
 from stream_fixtures import streamed_completion
-from test_session_input import case, config
 from trace_fixtures import CapturingExporter
 
 from uiprobe.agent import ExecutionAgent, model_from_client
@@ -47,6 +47,23 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                                         ]
                                     }
                                 ),
+                            },
+                        }
+                    ],
+                }
+            elif any(
+                t["function"]["name"] == "submit_checkpoint"
+                for t in body.get("tools", [])
+            ):
+                message = {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "submit",
+                            "type": "function",
+                            "function": {
+                                "name": "submit_checkpoint",
+                                "arguments": json.dumps({"checkpoint_id": "home"}),
                             },
                         }
                     ],
@@ -102,13 +119,13 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                     for _ in range(2):
                         exporter = CapturingExporter()
                         with run_trace(exporter):
-                            result = await session.run(json.dumps(case()), cfg)
+                            result = await session.run(prepared_case(cfg))
                         self.assertEqual(result.status, "passed", result.errors)
                         self.assertEqual(result.action_count, 0)
                         self.assertTrue(
                             (Path(directory, result.session_id) / "trace.json").exists()
                         )
-                        self.assertIsNotNone(result.submission)
+                        self.assertIsNotNone(result.execution_outcome)
                         self.assertFalse(client.is_closed())
                         run = Path(directory, result.session_id)
                         png = (run / "screenshots/screen-1.png").read_bytes()
@@ -130,7 +147,7 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                             for span in trace["spans"]
                             if span["attributes"].get("gen_ai.operation.name") == "chat"
                         ]
-                        self.assertEqual(len(model_spans), 2)
+                        self.assertEqual(len(model_spans), 3)
                         self.assertIn(
                             "Initial observation submitted", json.dumps(trace)
                         )
@@ -146,10 +163,10 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("screen-1", history)
                         self.assertNotIn("secret-value", history)
                         self.assertNotIn("data:image", history)
-                    self.assertEqual(len(requests), 4)
+                    self.assertEqual(len(requests), 6)
                     self.assertTrue(all(r["stream"] for r in requests))
                     self.assertNotIn("secret-value", repr(requests))
-                    self.assertNotIn("Login", repr(requests[1]))
+                    self.assertNotIn("Login", repr(requests[2]))
             finally:
                 server.shutdown()
                 server.server_close()
@@ -172,7 +189,7 @@ class ZeroActionTests(unittest.IsolatedAsyncioTestCase):
                 browser_factory=lambda: browser, agent=agent, verification=AsyncMock()
             )
             with self.assertRaises(asyncio.CancelledError):
-                await session.run(json.dumps(case()), config(directory))
+                await session.run(prepared_case(config(directory)))
             browser.close.assert_awaited_once()
             result = json.loads(next(Path(directory).glob("*/result.json")).read_text())
             self.assertEqual(result["stop_reason"], "cancelled")

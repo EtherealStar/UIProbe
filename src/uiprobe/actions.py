@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from pydantic_core import to_jsonable_python
@@ -17,7 +18,14 @@ from .browser import Browser, BrowserRejected
 from .case_input import StrictValue
 from .error_handling import LocatedFailure, describe
 from .observability import fact
+from .observation import CheckpointReceipt, Screenshot
 from .recording import SessionRecord
+
+AcceptCheckpoint = Callable[[str, Screenshot], CheckpointReceipt]
+
+
+class CheckpointRejected(Exception):
+    """The submitted identifier does not match the open checkpoint."""
 
 
 class TodoItem(StrictValue):
@@ -58,6 +66,7 @@ class Dependencies:
     browser: Browser
     budget: RunBudget
     record: SessionRecord
+    accept_checkpoint: AcceptCheckpoint
 
 
 tools = FunctionToolset[Dependencies]()
@@ -117,6 +126,17 @@ async def wait(ctx: RunContext[Dependencies], duration_ms: Duration) -> dict:
     )
 
 
+@tools.tool(sequential=True)
+async def submit_checkpoint(ctx: RunContext[Dependencies], checkpoint_id: str) -> dict:
+    """Submit the latest saved screenshot for the current checkpoint."""
+    deps = ctx.deps
+    receipt = deps.accept_checkpoint(
+        checkpoint_id, deps.context.browser_state.screenshot
+    )
+    deps.context.submitted = True
+    return asdict(receipt)
+
+
 class ActionSummary(TypedDict, total=False):
     tool: str
     input_screenshot_id: str
@@ -127,9 +147,12 @@ class ActionSummary(TypedDict, total=False):
 
 class ActionToolset(WrapperToolset[Dependencies]):
     async def get_tools(self, ctx):
-        if ctx.deps.budget.action_count >= ctx.deps.budget.max_actions:
+        if ctx.deps.context.submitted:
             return {}
-        return await super().get_tools(ctx)
+        available = await super().get_tools(ctx)
+        if ctx.deps.budget.action_count >= ctx.deps.budget.max_actions:
+            return {"submit_checkpoint": available["submit_checkpoint"]}
+        return available
 
     async def call_tool(self, name, tool_args, ctx, tool):
         d = ctx.deps
@@ -147,13 +170,23 @@ class ActionToolset(WrapperToolset[Dependencies]):
             arguments=json.dumps(to_jsonable_python(tool_args)),
             input_screenshot_id=input_id,
         )
-        d.record.append({"type": "tool_started", **event})
+        with d.record.writing("append_tool_started"):
+            d.record.append({"type": "tool_started", **event})
         operation = name
         try:
             if asyncio.get_running_loop().time() >= d.budget.deadline_at:
                 raise TimeoutError
-            if d.budget.action_count >= d.budget.max_actions:
-                raise ModelRetry("Action budget exhausted; summarize and submit")
+            if d.context.submitted:
+                raise ModelRetry(
+                    "The checkpoint has already been submitted. Return final text."
+                )
+            if (
+                name != "submit_checkpoint"
+                and d.budget.action_count >= d.budget.max_actions
+            ):
+                raise ModelRetry(
+                    "Action budget exhausted. Submit the current evidence or return final text."
+                )
             if (tool.tool_def.metadata or {}).get("refresh_browser_state"):
                 if not d.context.plan_created:
                     raise ModelRetry("Create a nonempty TODO before browser actions")
@@ -175,22 +208,8 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 )
             else:
                 result = await super().call_tool(name, tool_args, ctx, tool)
-        except (BrowserRejected, ModelRetry) as exc:
-            d.record.append(
-                {
-                    "type": "tool_finished",
-                    "status": "rejected",
-                    "reason": str(exc),
-                    **event,
-                }
-            )
-            fact(
-                "tool_rejected",
-                reason=str(exc),
-                call_id=ctx.tool_call_id or "",
-                tool=name,
-            )
-            raise ModelRetry(str(exc)) from None
+        except (BrowserRejected, CheckpointRejected, ModelRetry) as exc:
+            reason = str(exc)
         except Exception as exc:
             error, diagnostic = describe(
                 exc,
@@ -216,12 +235,30 @@ class ActionToolset(WrapperToolset[Dependencies]):
                     }
                 )
             raise LocatedFailure(error, diagnostic) from exc
-        d.record.append(
-            {"type": "tool_finished", "status": "completed", **event, **result}
-        )
+        else:
+            with d.record.writing("append_tool_result"):
+                d.record.append(
+                    {"type": "tool_finished", "status": "completed", **event, **result}
+                )
+            fact(
+                "tool_result",
+                call_id=ctx.tool_call_id or "",
+                result=json.dumps(result),
+            )
+            return result
+        with d.record.writing("append_tool_rejection"):
+            d.record.append(
+                {
+                    "type": "tool_finished",
+                    "status": "rejected",
+                    "reason": reason,
+                    **event,
+                }
+            )
         fact(
-            "tool_result",
+            "tool_rejected",
+            reason=reason,
             call_id=ctx.tool_call_id or "",
-            result=json.dumps(result),
+            tool=name,
         )
-        return result
+        raise ModelRetry(reason)

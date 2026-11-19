@@ -14,13 +14,13 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from .error_handling import LocatedFailure, SessionError, describe
+from .error_handling import LocatedFailure, RunError, describe
 from .observation import CheckpointSubmission, Screenshot
 
 
 @contextmanager
 def _writing(
-    failures: list[tuple[SessionError, dict]],
+    failures: list[tuple[RunError, dict]],
     operation: str,
     *,
     defer: bool = False,
@@ -80,23 +80,11 @@ def _save_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-class SessionRecord:
-    def __init__(self, session_id: str, directory: Path):
-        self.failures: list[tuple[SessionError, dict]] = []
-        self.trace_id: str | None = None
-        self.session_id = session_id
+class RunRecord:
+    def __init__(self, directory: Path, association: dict[str, str]):
         self.directory = directory
-
-    def writing(self, operation: str, *, defer: bool = False):
-        return _writing(self.failures, operation, defer=defer)
-
-    def begin_submission(self, submission: CheckpointSubmission) -> "SubmissionRecord":
-        if submission.session_id != self.session_id:
-            raise ValueError("Submission belongs to a different session")
-        record = SubmissionRecord(self, submission)
-        with record.writing("create_submission_record"):
-            record.directory.mkdir(parents=True, exist_ok=False)
-        return record
+        self.association = association
+        self.trace_id: str | None = None
 
     @property
     def artifact_paths(self) -> list[str]:
@@ -109,7 +97,7 @@ class SessionRecord:
     def append(self, event: dict) -> None:
         payload = {
             **event,
-            "session_id": self.session_id,
+            **self.association,
             "trace_id": getattr(self, "trace_id", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -131,17 +119,63 @@ class SessionRecord:
             encoding="utf-8",
         )
 
-    def save_sent_messages(self, messages, screenshot: Screenshot) -> None:
-        _append_json(
-            self.directory / "execution-requests.jsonl",
-            _message_references(messages, screenshot),
-        )
-
     def save_diagnostic(self, diagnostic: dict) -> None:
         directory = self.directory / "diagnostics"
         directory.mkdir(exist_ok=True)
         (directory / f"{diagnostic['error_id']}.json").write_text(
             json.dumps(diagnostic, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def save_result(self, result) -> list[str]:
+        paths = self.artifact_paths + [str(self.directory / "result.json")]
+        payload = asdict(result)
+        payload["artifact_paths"] = paths
+        temporary = self.directory / ".result.tmp"
+        try:
+            temporary.write_text(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    default=lambda value: value.model_dump(),
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(self.directory / "result.json")
+        finally:
+            temporary.unlink(missing_ok=True)
+        return paths
+
+
+class SuiteRecord(RunRecord):
+    def __init__(self, suite_id: str, directory: Path):
+        super().__init__(directory, {"suite_id": suite_id})
+        self.suite_id = suite_id
+
+
+class SessionRecord(RunRecord):
+    def __init__(self, session_id: str, directory: Path, suite_id: str | None = None):
+        association = {"session_id": session_id}
+        if suite_id is not None:
+            association["suite_id"] = suite_id
+        super().__init__(directory, association)
+        self.failures: list[tuple[RunError, dict]] = []
+        self.session_id = session_id
+
+    def writing(self, operation: str, *, defer: bool = False):
+        return _writing(self.failures, operation, defer=defer)
+
+    def begin_submission(self, submission: CheckpointSubmission) -> "SubmissionRecord":
+        if submission.session_id != self.session_id:
+            raise ValueError("Submission belongs to a different session")
+        record = SubmissionRecord(self, submission)
+        with record.writing("create_submission_record"):
+            record.directory.mkdir(parents=True, exist_ok=False)
+        return record
+
+    def save_sent_messages(self, messages, screenshot: Screenshot) -> None:
+        _append_json(
+            self.directory / "execution-requests.jsonl",
+            _message_references(messages, screenshot),
         )
 
     def save_screenshot(self, screenshot: Screenshot) -> None:
@@ -157,31 +191,17 @@ class SessionRecord:
 
     def finish(self, result, history: list) -> list[str]:
         if not (self.directory / "history.json").exists():
-            (self.directory / "history.json").write_text(
-                json.dumps(history), encoding="utf-8"
-            )
-        paths = self.artifact_paths + [str(self.directory / "result.json")]
-        payload = asdict(result)
-        if result.test_case is not None:
-            payload["test_case"] = result.test_case.model_dump()
-        payload["artifact_paths"] = paths
-        temporary = self.directory / ".result.tmp"
-        try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-            )
-            temporary.replace(self.directory / "result.json")
-        finally:
-            temporary.unlink(missing_ok=True)
-        return paths
+            _save_json(self.directory / "history.json", history)
+        return self.save_result(result)
 
 
 class SubmissionRecord:
     def __init__(self, session: SessionRecord, submission: CheckpointSubmission):
         self._session = session
         self._submission = submission
+        self._input_saved = False
         self.directory = session.directory / "submissions" / submission.submission_id
-        self.failures: list[tuple[SessionError, dict]] = []
+        self.failures: list[tuple[RunError, dict]] = []
 
     @property
     def submission(self) -> CheckpointSubmission:
@@ -191,7 +211,7 @@ class SubmissionRecord:
     def association(self) -> dict[str, str]:
         submission = self._submission
         fields = {
-            "session_id": submission.session_id,
+            **self._session.association,
             "submission_id": submission.submission_id,
         }
         if submission.checkpoint_id is not None:
@@ -212,6 +232,8 @@ class SubmissionRecord:
         self._session.save_diagnostic(diagnostic)
 
     def save_input(self) -> None:
+        if self._input_saved:
+            return
         _save_json(
             self.directory / "input.json",
             {
@@ -219,6 +241,8 @@ class SubmissionRecord:
                 "assertions": [a.model_dump() for a in self._submission.assertions],
             },
         )
+
+        self._input_saved = True
 
     def save_messages(self, messages) -> None:
         _save_json(
@@ -234,7 +258,14 @@ class SubmissionRecord:
 
 
 class Recorder:
-    def begin(self, session_id: str, output_dir: str) -> SessionRecord:
+    def begin(
+        self, session_id: str, output_dir: str, *, suite_id: str | None = None
+    ) -> SessionRecord:
         directory = Path(output_dir).absolute() / session_id
         directory.mkdir(parents=True, exist_ok=False)
-        return SessionRecord(session_id, directory)
+        return SessionRecord(session_id, directory, suite_id)
+
+    def begin_suite(self, suite_id: str, output_dir: str) -> SuiteRecord:
+        directory = Path(output_dir).absolute() / suite_id
+        directory.mkdir(parents=True, exist_ok=False)
+        return SuiteRecord(suite_id, directory)

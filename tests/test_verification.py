@@ -6,7 +6,7 @@ from agent_support import begin_verification
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
-from uiprobe.case_input import TestCase
+from uiprobe.case_input import Checkpoint
 from uiprobe.error_handling import LocatedFailure
 from uiprobe.observation import Screenshot
 from uiprobe.recording import Recorder
@@ -40,8 +40,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
             record = Recorder().begin("test", directory)
             screenshot = Screenshot("screen-1", b"png", 10, 10)
             record.save_screenshot(screenshot)
-            case = TestCase.model_validate(
+            case = Checkpoint.model_validate(
                 {
+                    "id": "home",
                     "execution": {"goal": "PRIVATE EXECUTION", "instructions": []},
                     "assertions": [{"id": "home", "expected": "Home visible"}],
                 }
@@ -95,8 +96,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                         ]
                     )
 
-                case = TestCase.model_validate(
+                case = Checkpoint.model_validate(
                     {
+                        "id": "home",
                         "execution": {"goal": "private", "instructions": []},
                         "assertions": [
                             {"id": i, "expected": i} for i in ["one", "two"]
@@ -153,8 +155,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                             ]
                         )
 
-                    case = TestCase.model_validate(
+                    case = Checkpoint.model_validate(
                         {
+                            "id": "home",
                             "execution": {"goal": "private", "instructions": []},
                             "assertions": [{"id": "home", "expected": "Home"}],
                         }
@@ -189,8 +192,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
 
                     return ModelResponse(parts=[TextPart("Cannot judge")])
 
-                case = TestCase.model_validate(
+                case = Checkpoint.model_validate(
                     {
+                        "id": "home",
                         "execution": {"goal": "private", "instructions": []},
                         "assertions": [{"id": "home", "expected": "Home"}],
                     }
@@ -231,8 +235,9 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     requests.append(messages)
                     return ModelResponse(parts=[])
 
-                case = TestCase.model_validate(
+                case = Checkpoint.model_validate(
                     {
+                        "id": "home",
                         "execution": {"goal": "private", "instructions": []},
                         "assertions": [{"id": "home", "expected": "Home"}],
                     }

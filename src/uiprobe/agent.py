@@ -24,12 +24,19 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from .actions import ActionToolset, Dependencies, RunBudget, TodoItem, tools
+from .actions import (
+    AcceptCheckpoint,
+    ActionToolset,
+    Dependencies,
+    RunBudget,
+    TodoItem,
+    tools,
+)
 from .browser import Browser
-from .case_input import TestCase
+from .case_input import Checkpoint
 from .error_handling import LocatedFailure, describe, model_failure_code
 from .observability import fact, instrumentation, traced
-from .observation import BrowserState, Submission
+from .observation import BrowserState, ExecutionOutcome
 from .recording import SessionRecord
 
 
@@ -65,11 +72,12 @@ def model_from_client(client: AsyncOpenAI, model_name: str) -> Model:
 
 @dataclass
 class Context:
-    test_case: TestCase
+    checkpoint: Checkpoint
     ref_names: list[str]
     browser_state: BrowserState
     todo: list[TodoItem] = field(default_factory=list)
     plan_created: bool = False
+    submitted: bool = False
     history: list[ModelMessage] = field(default_factory=list)
 
     def messages_for_model(self) -> list[ModelMessage]:
@@ -111,7 +119,8 @@ class ExecutionAgent:
         browser: Browser,
         budget: RunBudget,
         tool_call_limit: int,
-    ) -> Submission:
+        accept_checkpoint: AcceptCheckpoint,
+    ) -> ExecutionOutcome:
         seen = 0
         feedback_seen: set[int] = set()
 
@@ -153,7 +162,8 @@ class ExecutionAgent:
             nonlocal seen
             if asyncio.get_running_loop().time() >= deadline_at:
                 raise TimeoutError
-            feedback(messages)
+            with record.writing("save_tool_feedback"):
+                feedback(messages)
             context.history.extend(messages[seen:])
             state = context.browser_state
             observation = ModelRequest(
@@ -171,20 +181,25 @@ class ExecutionAgent:
                 ]
             )
             context.history.append(observation)
-            if budget.action_count >= budget.max_actions:
+            only_submit = (
+                not context.submitted and budget.action_count >= budget.max_actions
+            )
+            if only_submit:
                 context.history.append(
                     ModelRequest(
                         parts=[
                             UserPromptPart(
-                                "Action budget exhausted; all tools disabled. Summarize and submit."
+                                "Action budget exhausted. Submit the current evidence or explain why execution stopped."
                             )
                         ]
                     )
                 )
-            record.save_messages(context.history, state.screenshot)
+            with record.writing("save_execution_history"):
+                record.save_messages(context.history, state.screenshot)
             view = context.messages_for_model()
-            view[-2 if budget.action_count >= budget.max_actions else -1] = observation
-            record.save_sent_messages(view, state.screenshot)
+            view[-2 if only_submit else -1] = observation
+            with record.writing("save_execution_requests"):
+                record.save_sent_messages(view, state.screenshot)
             seen = len(view)
             return view
 
@@ -192,7 +207,8 @@ class ExecutionAgent:
             nonlocal seen
             context.history.append(response)
             seen = len(request_context.messages) + 1
-            record.save_messages(context.history, context.browser_state.screenshot)
+            with record.writing("save_execution_history"):
+                record.save_messages(context.history, context.browser_state.screenshot)
             return response
 
         agent = FrameworkAgent(
@@ -204,14 +220,14 @@ class ExecutionAgent:
                 ProcessHistory(capture),
                 Hooks(after_model_request=after_response),
             ],
-            instructions="Read the test case and browser observation. Return final text when execution is complete. Submission does not establish assertion results.",
+            instructions="Read the current checkpoint and browser observation. Use submit_checkpoint to submit the current screenshot for independent verification. After submission, return final text. If execution cannot continue, explain why in final text.",
         )
         agent.instrument = instrumentation()
 
         state = context.browser_state
         prompt = json.dumps(
             {
-                "test_case": context.test_case.model_dump(),
+                "checkpoint": context.checkpoint.model_dump(),
                 "ref_names": context.ref_names,
                 "screenshot_id": state.screenshot.screenshot_id,
                 "image_width": state.screenshot.image_width,
@@ -224,21 +240,24 @@ class ExecutionAgent:
             async with asyncio.timeout_at(deadline_at):
                 async with agent.iter(
                     prompt,
-                    deps=Dependencies(context, browser, budget, record),
+                    deps=Dependencies(
+                        context, browser, budget, record, accept_checkpoint
+                    ),
                     usage_limits=UsageLimits(
                         request_limit=request_limit, tool_calls_limit=tool_call_limit
                     ),
                 ) as run:
                     try:
                         async for _ in run:
-                            feedback(run.all_messages())
+                            with record.writing("save_tool_feedback"):
+                                feedback(run.all_messages())
                     finally:
                         context.history.extend(run.all_messages()[seen:])
                         with record.writing("save_tool_feedback"):
                             feedback(run.all_messages())
                     result = run.result
                     assert result is not None
-            return Submission(result.output)
+            return ExecutionOutcome(result.output)
         except Exception as exc:
             if not isinstance(exc, LocatedFailure):
                 error, diagnostic = describe(

@@ -4,7 +4,7 @@ from agent_support import PLAN, calls, run_actions
 
 
 class BudgetTests(unittest.IsolatedAsyncioTestCase):
-    async def test_last_observation_precedes_disabling_all_tools(self):
+    async def test_last_observation_is_available_when_action_budget_is_exhausted(self):
         context, budget, submission, _, events, requests = await run_actions(
             [
                 calls(PLAN),

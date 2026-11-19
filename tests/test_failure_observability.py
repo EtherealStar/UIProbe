@@ -4,8 +4,8 @@ import time
 import unittest
 
 from agent_support import PLAN, begin_verification, calls, run_actions
+from input_fixtures import case, config, prepared_case
 from pydantic_ai.models.function import FunctionModel
-from test_session_input import case
 
 from uiprobe.case_input import TestCase
 from uiprobe.observation import Screenshot
@@ -79,7 +79,7 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
             record = Recorder().begin("run", directory)
             evidence, verification_record = begin_verification(
                 record,
-                TestCase.model_validate(case()),
+                TestCase.model_validate(case()).checkpoints[0],
                 Screenshot("screen-1", b"png", 1, 1),
             )
             verdict = await Verification(FunctionModel(respond)).evaluate(
@@ -101,7 +101,6 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
 
         from pydantic_ai.messages import ModelResponse, TextPart
-        from test_session_input import config
         from trace_fixtures import CapturingExporter
 
         from uiprobe.agent import ExecutionAgent
@@ -158,9 +157,9 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                         browser_factory=lambda: browser,
                         agent=ExecutionAgent(FunctionModel(respond)),
                         verification=NoVerification(),
-                    ).run(json.dumps(case()), cfg)
-                self.assertIsNone(result.submission)
-                self.assertIsNone(result.verdict)
+                    ).run(prepared_case(cfg))
+                self.assertIsNone(result.execution_outcome)
+                self.assertIsNone(result.checkpoints[0].verdict)
                 self.assertEqual(result.status, "error")
                 self.assertEqual(result.stop_reason, "execution_error")
                 self.assertEqual(result.action_count, 1)
@@ -220,7 +219,7 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                 record = Recorder().begin("run", directory)
                 evidence, verification_record = begin_verification(
                     record,
-                    TestCase.model_validate(case()),
+                    TestCase.model_validate(case()).checkpoints[0],
                     None if mode == "missing" else Screenshot("screen-1", b"png", 1, 1),
                 )
                 verdict = await Verification(FunctionModel(respond)).evaluate(
@@ -243,7 +242,6 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         import httpx2 as httpx
         from openai import AsyncOpenAI
-        from test_session_input import config
         from trace_fixtures import CapturingExporter
 
         from uiprobe.agent import ExecutionAgent, model_from_client
@@ -317,11 +315,11 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                             verification=Verification(
                                 model_from_client(client, "test")
                             ),
-                        ).run(json.dumps(case()), cfg)
+                        ).run(prepared_case(cfg))
                 self.assertEqual(result.stop_reason, "execution_error")
                 self.assertEqual(result.action_count, 0)
-                self.assertIsNone(result.submission)
-                self.assertIsNone(result.verdict)
+                self.assertIsNone(result.execution_outcome)
+                self.assertIsNone(result.checkpoints[0].verdict)
                 self.assertEqual(len(requests), 3 if mode == "connection" else 1)
                 error = result.errors[0]
                 diagnostic = json.loads(
@@ -345,7 +343,6 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
         from test_observability import Submit
-        from test_session_input import config
 
         from uiprobe.observability import run_trace
         from uiprobe.observation import AssertionResult, Status, Verdict
@@ -400,12 +397,12 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                         ):
                             result = await Session(
                                 agent=Submit(), verification=Judge(status)
-                            ).run(json.dumps(case()), cfg)
+                            ).run(prepared_case(cfg))
                     self.assertEqual(result.status, status)
-                    assert result.verdict is not None
-                    self.assertEqual(result.verdict.status, status)
+                    assert result.checkpoints[0].verdict is not None
+                    self.assertEqual(result.checkpoints[0].verdict.status, status)
                     self.assertFalse(result.errors)
-                    self.assertIsNotNone(result.submission)
+                    self.assertIsNotNone(result.execution_outcome)
                     trace = json.loads(
                         Path(directory, result.session_id, "trace.json").read_text()
                     )

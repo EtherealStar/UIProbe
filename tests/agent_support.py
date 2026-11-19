@@ -4,23 +4,27 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
+from input_fixtures import case
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
-from test_session_input import case
 
 from uiprobe.actions import RunBudget
 from uiprobe.agent import Context, ExecutionAgent
 from uiprobe.browser import Browser
-from uiprobe.case_input import TestCase
+from uiprobe.case_input import Checkpoint, TestCase
 from uiprobe.observation import CheckpointSubmission, Screenshot
 from uiprobe.recording import Recorder, SessionRecord
 
 
 def begin_verification(
-    record: SessionRecord, test_case: TestCase, screenshot: Screenshot | None
+    record: SessionRecord, checkpoint: Checkpoint, screenshot: Screenshot | None
 ):
     evidence = CheckpointSubmission(
-        uuid4().hex, record.session_id, None, tuple(test_case.assertions), screenshot
+        uuid4().hex,
+        record.session_id,
+        checkpoint.id,
+        tuple(checkpoint.assertions),
+        screenshot,
     )
     return evidence, record.begin_submission(evidence)
 
@@ -56,7 +60,9 @@ async def run_actions(
             state = await browser.open(path.as_uri(), values or {}, deadline)
             record.save_screenshot(state.screenshot)
             context = Context(
-                TestCase.model_validate(case()), list(values or {}), state
+                TestCase.model_validate(case()).checkpoints[0],
+                list(values or {}),
+                state,
             )
             submission = await ExecutionAgent(FunctionModel(respond)).execute(
                 context,
@@ -67,6 +73,7 @@ async def run_actions(
                 browser=browser,
                 budget=budget,
                 tool_call_limit=40,
+                accept_checkpoint=unexpected_submission,
             )
             history = json.loads((record.directory / "history.json").read_text())
             assert "screenshot" in str(history)
@@ -87,3 +94,20 @@ PLAN = (
     "replace_todo",
     {"items": [{"description": "Operate page", "status": "in_progress"}]},
 )
+
+
+def unexpected_submission(*args):
+    raise AssertionError("This execution should not submit a checkpoint")
+
+
+def finish_execution(info, text="Done"):
+    if any(tool.name == "submit_checkpoint" for tool in info.function_tools):
+        return calls(("submit_checkpoint", {"checkpoint_id": "home"}))
+    return ModelResponse(parts=[TextPart(text)])
+
+
+async def submit_and_finish(context, *, accept_checkpoint, **kwargs):
+    from uiprobe.observation import ExecutionOutcome
+
+    accept_checkpoint(context.checkpoint.id, context.browser_state.screenshot)
+    return ExecutionOutcome("Done")

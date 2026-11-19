@@ -5,9 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from test_session_input import case, config
+from agent_support import finish_execution, submit_and_finish
+from input_fixtures import config, prepared_case
 
-from uiprobe.observation import BrowserState, Screenshot, Submission, Verdict
+from uiprobe.observation import BrowserState, Screenshot, Verdict
 from uiprobe.recording import Recorder, SessionRecord
 from uiprobe.session import Session
 
@@ -43,7 +44,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 Screenshot("screen-1", b"png", 1, 1), 1, 1
             )
             agent = AsyncMock()
-            agent.execute.return_value = Submission("Done")
+            agent.execute.side_effect = submit_and_finish
             verification = AsyncMock()
             verification.evaluate.return_value = Verdict(
                 "test-submission", "passed", []
@@ -70,9 +71,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     raise OSError("private")
 
             class BrokenRecorder(Recorder):
-                def begin(self, session_id, output_dir):
-                    record = super().begin(session_id, output_dir)
-                    return BrokenRecord(session_id, record.directory)
+                def begin(self, session_id, output_dir, *, suite_id=None):
+                    record = super().begin(session_id, output_dir, suite_id=suite_id)
+                    return BrokenRecord(session_id, record.directory, suite_id)
 
             session = Session(
                 browser_factory=lambda: browser,
@@ -85,18 +86,18 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 cfg["timeout_seconds"] = 0.05
             if phase == "cancel":
                 with self.assertRaises(asyncio.CancelledError):
-                    await session.run(json.dumps(case()), cfg)
+                    await session.run(prepared_case(cfg))
                 verification.evaluate.assert_not_awaited()
                 browser.close.assert_awaited_once()
                 return
-            result = await session.run(json.dumps(case()), cfg)
+            result = await session.run(prepared_case(cfg))
             self.assertEqual(result.status, "error")
             browser.close.assert_awaited_once()
             self.assertNotIn("private", repr(result))
             if phase in ("cleanup", "finish"):
-                assert result.verdict is not None
-                self.assertEqual(result.verdict.status, "passed")
-                self.assertEqual(result.stop_reason, "verification_completed")
+                assert result.checkpoints[0].verdict is not None
+                self.assertEqual(result.checkpoints[0].verdict.status, "passed")
+                self.assertEqual(result.stop_reason, "execution_completed")
             elif phase in ("initialization", "execution", "timeout"):
                 verification.evaluate.assert_not_awaited()
             self.assertTrue(all(Path(p).exists() for p in result.artifact_paths))
@@ -117,7 +118,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_browser_and_verification_preserve_pass_after_cleanup_failure(
         self,
     ):
-        from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
         from pydantic_ai.models.function import FunctionModel
 
         from uiprobe.agent import ExecutionAgent
@@ -147,7 +148,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                         )
                     ]
                 )
-            return ModelResponse(parts=[TextPart("Done")])
+            return finish_execution(info)
 
         with tempfile.TemporaryDirectory() as directory:
             cfg = config(directory)
@@ -157,15 +158,15 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 browser_factory=CloseFailure,
                 agent=ExecutionAgent(model),
                 verification=Verification(model),
-            ).run(json.dumps(case()), cfg)
+            ).run(prepared_case(cfg))
             self.assertEqual(result.status, "error")
-            assert result.verdict is not None
-            self.assertEqual(result.verdict.status, "passed")
-            self.assertEqual(result.stop_reason, "verification_completed")
-            assert result.verdict is not None
+            assert result.checkpoints[0].verdict is not None
+            self.assertEqual(result.checkpoints[0].verdict.status, "passed")
+            self.assertEqual(result.stop_reason, "execution_completed")
+            assert result.checkpoints[0].verdict is not None
             submission_dir = (
                 Path(directory, result.session_id, "submissions")
-                / result.verdict.submission_id
+                / result.checkpoints[0].verdict.submission_id
             )
             self.assertTrue((submission_dir / "history.json").is_file())
 
@@ -204,9 +205,11 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                         return super().append(event)
 
                 class FaultRecorder(Recorder):
-                    def begin(self, session_id, output_dir):
-                        record = super().begin(session_id, output_dir)
-                        return FaultRecord(session_id, record.directory)
+                    def begin(self, session_id, output_dir, *, suite_id=None):
+                        record = super().begin(
+                            session_id, output_dir, suite_id=suite_id
+                        )
+                        return FaultRecord(session_id, record.directory, suite_id)
 
                 browser = FaultBrowser()
                 responses = [
@@ -227,7 +230,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     recorder=FaultRecorder(),
                     agent=ExecutionAgent(FunctionModel(respond)),
                     verification=verification,
-                ).run(json.dumps(case()), cfg)
+                ).run(prepared_case(cfg))
                 self.assertEqual(result.status, "error")
                 verification.evaluate.assert_not_awaited()
                 self.assertEqual(len(requests), 1 if fault == "append" else 2)
@@ -251,9 +254,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     completed.set()
 
         class SlowRecorder(Recorder):
-            def begin(self, session_id, output_dir):
-                record = super().begin(session_id, output_dir)
-                return SlowRecord(session_id, record.directory)
+            def begin(self, session_id, output_dir, *, suite_id=None):
+                record = super().begin(session_id, output_dir, suite_id=suite_id)
+                return SlowRecord(session_id, record.directory, suite_id)
 
         with tempfile.TemporaryDirectory() as directory:
             browser = AsyncMock()
@@ -261,7 +264,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 Screenshot("screen-1", b"png", 1, 1), 1, 1
             )
             agent = AsyncMock()
-            agent.execute.return_value = Submission("Done")
+            agent.execute.side_effect = submit_and_finish
             verification = AsyncMock()
             verification.evaluate.return_value = Verdict(
                 "test-submission", "passed", []
@@ -273,10 +276,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                         agent=agent,
                         verification=verification,
                         recorder=SlowRecorder(),
-                    ).run(json.dumps(case()), config(directory))
+                    ).run(prepared_case(config(directory)))
                 self.assertEqual(result.errors[-1].code, "finalization_timeout")
                 self.assertEqual(result.status, "error")
-                self.assertEqual(result.stop_reason, "verification_completed")
+                self.assertEqual(result.stop_reason, "execution_completed")
                 self.assertFalse(
                     any(p.endswith("result.json") for p in result.artifact_paths)
                 )
@@ -299,9 +302,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 return super().finish(result, history)
 
         class PausedRecorder(Recorder):
-            def begin(self, session_id, output_dir):
-                record = super().begin(session_id, output_dir)
-                return PausedRecord(session_id, record.directory)
+            def begin(self, session_id, output_dir, *, suite_id=None):
+                record = super().begin(session_id, output_dir, suite_id=suite_id)
+                return PausedRecord(session_id, record.directory, suite_id)
 
         with tempfile.TemporaryDirectory() as directory:
             browser = AsyncMock()
@@ -309,7 +312,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 Screenshot("screen-1", b"png", 1, 1), 1, 1
             )
             agent = AsyncMock()
-            agent.execute.return_value = Submission("Done")
+            agent.execute.side_effect = submit_and_finish
             verification = AsyncMock()
             verification.evaluate.return_value = Verdict(
                 "test-submission", "passed", []
@@ -320,7 +323,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     agent=agent,
                     verification=verification,
                     recorder=PausedRecorder(),
-                ).run(json.dumps(case()), config(directory))
+                ).run(prepared_case(config(directory)))
             )
             try:
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
@@ -332,4 +335,4 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(next(Path(directory).glob("*/result.json")).read_text())
             self.assertEqual(saved["stop_reason"], "cancelled")
             self.assertEqual(saved["status"], "error")
-            self.assertEqual(saved["verdict"]["status"], "passed")
+            self.assertEqual(saved["checkpoints"][0]["verdict"]["status"], "passed")

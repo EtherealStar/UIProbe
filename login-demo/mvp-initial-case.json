@@ -1,14 +1,21 @@
 {
-  "execution": {
-    "goal": "确认初始登录页面",
-    "instructions": [
-      "直接根据初始截图提交，不调用任何工具，不创建 TODO，不操作页面"
-    ]
-  },
-  "assertions": [
+  "id": "initial-login",
+  "name": "初始登录页",
+  "checkpoints": [
     {
-      "id": "login_visible",
-      "expected": "页面显示账号登录标题、账号和密码输入框以及登录按钮"
+      "id": "login-page",
+      "execution": {
+        "goal": "确认初始登录页面",
+        "instructions": [
+          "使用 submit_checkpoint 提交初始截图，然后用最终文本结束。无需创建 TODO 或操作页面。"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "login_visible",
+          "expected": "页面显示账号登录标题、账号和密码输入框以及登录按钮"
+        }
+      ]
     }
   ]
 }

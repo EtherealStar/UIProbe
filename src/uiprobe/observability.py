@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
+from opentelemetry.context import Context
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -123,12 +124,10 @@ class RunTrace:
         )
 
     def warn(self, operation, message, exc=None):
-        from .error_handling import SessionError, describe
+        from .error_handling import RunError, describe
 
         if exc is None:
-            summary = SessionError(
-                "observability", "online_incomplete", message, operation
-            )
+            summary = RunError("observability", "online_incomplete", message, operation)
             diagnostic = {
                 **summary.__dict__,
                 "exception_type": None,
@@ -150,9 +149,9 @@ class RunTrace:
 
 
 @contextmanager
-def run_trace(exporter=None):
+def run_trace(exporter=None, *, independent=False):
     existing = _current.get()
-    if existing is not None:
+    if existing is not None and not independent:
         yield existing
         return
     scope = RunTrace(exporter)
@@ -167,7 +166,9 @@ def run_trace(exporter=None):
     handler = QueueWarnings()
     logger.addHandler(handler)
     try:
-        with scope.tracer.start_as_current_span("application") as root:
+        with scope.tracer.start_as_current_span(
+            "application", context=Context()
+        ) as root:
             scope.root = root
             yield scope
     finally:
@@ -211,7 +212,6 @@ def run_trace(exporter=None):
                 scope.save()
             except OSError as exc:
                 scope.local_error = exc
-                # Final trace update follows the already finalized SessionResult.
                 print(
                     f"Cannot finalize local trace: {type(exc).__name__}",
                     file=sys.stderr,
@@ -233,21 +233,6 @@ def traced(name):
             with run_trace() as scope:
                 with scope.tracer.start_as_current_span(name):
                     result = await function(*args, **kwargs)
-            if scope.local_error is not None and hasattr(result, "errors"):
-                from .error_handling import describe
-
-                error, _ = describe(
-                    scope.local_error,
-                    "recording",
-                    "save_trace",
-                    "trace_save_failed",
-                    "Cannot finalize local trace",
-                )
-                result.errors.append(error)
-                result.status = "error"
-                result.artifact_paths = [
-                    p for p in result.artifact_paths if not p.endswith("/result.json")
-                ]
             return result
 
         return call
@@ -260,48 +245,22 @@ def fact(name, **attributes):
     if scope is not None:
         from opentelemetry import trace
 
-        trace.get_current_span().add_event(name, attributes)
+        trace.get_current_span().add_event(
+            name, {key: value for key, value in attributes.items() if value is not None}
+        )
 
 
 def bind_record(record):
     scope = _current.get()
-    if scope is not None:
+    if scope is None:
+        return
+    from opentelemetry import trace
+
+    record.trace_id = format(scope.root.get_span_context().trace_id, "032x")
+    span = trace.get_current_span()
+    for key, value in record.association.items():
+        span.set_attribute(key, value)
+    if scope.record is None:
         scope.record = record
-        scope.root.set_attribute("session_id", record.session_id)
-        record.trace_id = format(scope.root.get_span_context().trace_id, "032x")
-        scope.save()
-
-
-async def update_result(result, diagnostic):
-    """Refresh an application result after cleanup; stale snapshots are not artifacts."""
-    import asyncio
-    from copy import deepcopy
-
-    from .session import Session
-
-    fact("diagnostic", **diagnostic)
-    scope = _current.get()
-    if scope is None or scope.record is None:
-        return result
-    record = scope.record
-    try:
-        async with asyncio.timeout(5):
-            return await asyncio.to_thread(
-                Session._finish_record, record, deepcopy(result), True, [diagnostic]
-            )
-    except TimeoutError as exc:
-        from .error_handling import describe
-
-        error, diagnostic = describe(
-            exc,
-            "recording",
-            "save_application_result",
-            "finalization_timeout",
-            "Cannot update result after client cleanup",
-        )
-        result.errors.append(error)
-        fact("diagnostic", **diagnostic)
-        result.artifact_paths = [
-            p for p in result.artifact_paths if not p.endswith("/result.json")
-        ]
-        return result
+        for key, value in record.association.items():
+            scope.root.set_attribute(key, value)

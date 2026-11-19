@@ -9,18 +9,19 @@ import time
 import unittest
 from pathlib import Path
 
+from input_fixtures import config, prepared_case
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from test_session_input import case, config
 from trace_fixtures import CapturingExporter
 
 from uiprobe.observability import run_trace
-from uiprobe.observation import AssertionResult, Submission, Verdict
+from uiprobe.observation import AssertionResult, ExecutionOutcome, Verdict
 from uiprobe.session import Session
 
 
 class Submit:
-    async def execute(self, *args, **kwargs):
-        return Submission("Initial error page observed")
+    async def execute(self, context, *, accept_checkpoint, **kwargs):
+        accept_checkpoint(context.checkpoint.id, context.browser_state.screenshot)
+        return ExecutionOutcome("Initial error page observed")
 
 
 class Judge:
@@ -63,7 +64,7 @@ class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
                     with run_trace(exporter):
                         result = await Session(
                             agent=Submit(), verification=Judge()
-                        ).run(json.dumps(case()), cfg)
+                        ).run(prepared_case(cfg))
                     self.assertEqual(result.status, "failed", result.errors)
                     self.assertEqual(result.action_count, 0)
                     trace = json.loads(

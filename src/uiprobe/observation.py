@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from .case_input import Assertion
+from .case_input import Assertion, Checkpoint
 
 Status = Literal["passed", "failed", "error"]
 
@@ -24,7 +24,7 @@ class BrowserState:
 
 
 @dataclass(frozen=True)
-class Submission:
+class ExecutionOutcome:
     text: str
 
 
@@ -50,3 +50,22 @@ class Verdict:
     submission_id: str
     status: Status
     assertions: list[AssertionResult]
+
+
+@dataclass(frozen=True)
+class CheckpointReceipt:
+    submission_id: str
+    checkpoint_id: str
+    screenshot_id: str
+    next_checkpoint: Checkpoint | None = None
+
+
+@dataclass
+class CheckpointResult:
+    checkpoint_id: str
+    state: Literal["not_reached", "not_submitted", "queued", "running", "finished"] = (
+        "not_reached"
+    )
+    submission_id: str | None = None
+    screenshot_id: str | None = None
+    verdict: Verdict | None = None

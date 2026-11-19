@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from test_session_input import case, config
+from input_fixtures import config, prepared_case
 
 from uiprobe.browser import Browser
 from uiprobe.session import Session
@@ -20,7 +20,7 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             browser = Browser()
             agent = AsyncMock()
             result = await Session(browser_factory=lambda: browser, agent=agent).run(
-                json.dumps(case()), cfg
+                prepared_case(cfg)
             )
             error = result.errors[0]
             self.assertEqual(error.operation, "navigate")
@@ -50,7 +50,7 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             except OSError as exc:
                 browser.open.side_effect = exc
             result = await Session(browser_factory=lambda: browser).run(
-                json.dumps(case()), config(directory)
+                prepared_case(config(directory))
             )
             error = result.errors[0]
             self.assertEqual(error.phase, "initialization")
@@ -71,13 +71,13 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             cfg_path = Path(directory) / "config.json"
-            cfg_path.write_text(json.dumps(config(directory)))
+            cfg_path.write_text(json.dumps({"defaults": config(directory)}))
             result = await run_files(Path(directory) / "missing.json", cfg_path)
             error = result.errors[0]
             self.assertEqual(error.operation, "read_case")
             diagnostic_path = (
                 Path(directory)
-                / result.session_id
+                / result.suite_id
                 / "diagnostics"
                 / f"{error.error_id}.json"
             )
@@ -87,7 +87,7 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 Path(directory) / "missing.json",
                 Path(directory) / "missing-config.json",
             )
-            self.assertEqual(result.errors[0].operation, "read_config")
+            self.assertEqual(result.errors[1].operation, "read_config")
             self.assertEqual(result.artifact_paths, [])
 
     async def test_initialization_timeout_retains_current_operation(self):
@@ -102,8 +102,6 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             cfg = config(directory)
             cfg["timeout_seconds"] = 0.02
-            result = await Session(browser_factory=SlowBrowser).run(
-                json.dumps(case()), cfg
-            )
+            result = await Session(browser_factory=SlowBrowser).run(prepared_case(cfg))
             self.assertEqual(result.errors[0].operation, "navigate")
             self.assertEqual(result.errors[0].phase, "initialization")

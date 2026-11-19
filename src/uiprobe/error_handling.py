@@ -7,12 +7,15 @@ from uuid import uuid4
 
 
 @dataclass(frozen=True)
-class SessionError:
+class RunError:
     phase: str
     code: str
     message: str
     operation: str = ""
     error_id: str = field(default_factory=lambda: uuid4().hex)
+
+    checkpoint_id: str | None = None
+    submission_id: str | None = None
 
     def __post_init__(self):
         if not self.operation:
@@ -33,7 +36,7 @@ class SessionError:
 
 
 class LocatedFailure(Exception):
-    def __init__(self, summary: SessionError, diagnostic: dict):
+    def __init__(self, summary: RunError, diagnostic: dict):
         super().__init__(summary.message)
         self.summary = summary
         self.diagnostic = diagnostic
@@ -47,7 +50,7 @@ def describe(exc: BaseException, phase: str, operation: str, code: str, message:
     partial = getattr(exc, "uiprobe_partial_output", None)
     if partial is not None:
         operation, code = "request_stream", "model_stream_incomplete"
-    summary = SessionError(phase, code, message, operation)
+    summary = RunError(phase, code, message, operation)
     diagnostic = {
         **summary.__dict__,
         "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",

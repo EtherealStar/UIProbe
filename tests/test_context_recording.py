@@ -1,6 +1,6 @@
 import unittest
 
-from agent_support import PLAN, calls, run_actions
+from agent_support import PLAN, calls, run_actions, unexpected_submission
 from pydantic_ai import BinaryContent
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
@@ -50,9 +50,9 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         import json
         import tempfile
 
+        from input_fixtures import case
         from pydantic_ai.exceptions import UsageLimitExceeded
         from pydantic_ai.models.function import FunctionModel
-        from test_session_input import case
 
         from uiprobe.actions import RunBudget
         from uiprobe.agent import Context, ExecutionAgent
@@ -65,7 +65,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
             record = Recorder().begin("test", directory)
             state = BrowserState(Screenshot("screen-1", b"png", 1, 1), 1, 1)
             record.save_screenshot(state.screenshot)
-            context = Context(TestCase.model_validate(case()), [], state)
+            context = Context(TestCase.model_validate(case()).checkpoints[0], [], state)
             deadline = asyncio.get_running_loop().time() + 10
             with self.assertRaises(UsageLimitExceeded):
                 await ExecutionAgent(
@@ -79,6 +79,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
                     browser=Browser(),
                     budget=RunBudget(deadline, 1),
                     tool_call_limit=5,
+                    accept_checkpoint=unexpected_submission,
                 )
             history = json.loads((record.directory / "history.json").read_text())
             self.assertEqual(
