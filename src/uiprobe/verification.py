@@ -1,6 +1,7 @@
 """Independent visual verification using the framework's output correction loop."""
 
 import asyncio
+import json
 import time
 
 from pydantic import Field, field_validator
@@ -9,15 +10,11 @@ from pydantic_ai.capabilities import Hooks, ProcessHistory
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
-from .case_input import StrictValue, TestCase
-from .error_handling import describe, model_failure_code
-from .observability import fact, instrumentation, traced
-from .observation import AssertionResult, Screenshot, Status, Verdict
-from .recording import SessionRecord
-
-
-class VerificationRecordingError(OSError):
-    """Local verification evidence could not be saved."""
+from .case_input import StrictValue
+from .error_handling import LocatedFailure, describe, model_failure_code
+from .observability import fact, instrumentation, run_trace
+from .observation import AssertionResult, CheckpointSubmission, Status, Verdict
+from .recording import SubmissionRecord
 
 
 class Judgment(StrictValue):
@@ -41,31 +38,54 @@ class Verification:
     def __init__(self, model: Model):
         self.model = model
 
-    @traced("verification")
     async def evaluate(
         self,
-        test_case: TestCase,
-        evidence_screenshot: Screenshot | None,
+        submission: CheckpointSubmission,
         deadline_at: float,
         *,
-        record: SessionRecord,
+        record: SubmissionRecord,
         request_limit: int,
         retry_limit: int,
     ) -> Verdict:
-        screenshot = evidence_screenshot
+        if record.submission != submission:
+            raise ValueError("Verification record belongs to a different submission")
+        with (
+            run_trace() as scope,
+            scope.tracer.start_as_current_span(
+                "verification", attributes=record.association
+            ),
+        ):
+            try:
+                return await self._evaluate(
+                    submission, deadline_at, record, request_limit, retry_limit
+                )
+            except LocatedFailure as exc:
+                fact("diagnostic", **exc.diagnostic)
+                raise
+            finally:
+                for _, diagnostic in record.failures:
+                    fact("diagnostic", **diagnostic)
+
+    async def _evaluate(
+        self,
+        submission: CheckpointSubmission,
+        deadline_at: float,
+        record: SubmissionRecord,
+        request_limit: int,
+        retry_limit: int,
+    ) -> Verdict:
+        screenshot = submission.screenshot
         history = []
 
         def save(messages):
-            try:
-                record.save_messages("verification", messages, screenshot)
-            except OSError as exc:
-                raise VerificationRecordingError from exc
+            with record.writing("save_verification_history"):
+                record.save_messages(messages)
 
         async def capture(messages):
             history[:] = messages
             save(messages)
-            if screenshot is not None:
-                record.save_sent_messages("verification", messages, screenshot)
+            with record.writing("save_verification_requests"):
+                record.save_sent_messages(messages)
             return messages
 
         async def after_response(ctx, *, request_context, response):
@@ -91,14 +111,15 @@ class Verification:
         def validate(ctx: RunContext, output: Judgments) -> Judgments:
             ids = [item.assertion_id for item in output.results]
             if len(ids) != len(set(ids)) or set(ids) != {
-                a.id for a in test_case.assertions
+                a.id for a in submission.assertions
             }:
                 raise ModelRetry(
                     "Return exactly one result for every supplied assertion ID."
                 )
             return output
 
-        record.save_verification_input(test_case, screenshot)
+        with record.writing("save_verification_input"):
+            record.save_input()
         operation = "check_evidence"
         try:
             if screenshot is None or deadline_at <= time.monotonic():
@@ -109,7 +130,15 @@ class Verification:
             async with asyncio.timeout_at(deadline_at):
                 result = await agent.run(
                     [
-                        test_case.model_dump_json(include={"assertions"}),
+                        json.dumps(
+                            {
+                                "assertions": [
+                                    a.model_dump() for a in submission.assertions
+                                ]
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         BinaryContent(data=screenshot.png, media_type="image/png"),
                     ],
                     usage_limits=UsageLimits(request_limit=request_limit),
@@ -123,9 +152,9 @@ class Verification:
                     by_id[a.id].reason,
                     screenshot.screenshot_id,
                 )
-                for a in test_case.assertions
+                for a in submission.assertions
             ]
-        except VerificationRecordingError:
+        except LocatedFailure:
             raise
         except Exception as exc:
             error, diagnostic = describe(
@@ -135,7 +164,7 @@ class Verification:
                 "evidence_missing" if screenshot is None else model_failure_code(exc),
                 f"Visual verification system failed ({type(exc).__name__})",
             )
-            fact("diagnostic", **diagnostic)
+            diagnostic.update(record.association)
             record.failures.append((error, diagnostic))
             with record.writing("save_verification_failure"):
                 record.save_diagnostic(diagnostic)
@@ -148,11 +177,11 @@ class Verification:
                     reason,
                     screenshot.screenshot_id if screenshot else None,
                 )
-                for a in test_case.assertions
+                for a in submission.assertions
             ]
         finally:
             with record.writing("save_verification_history", defer=True):
-                record.save_messages("verification", history, screenshot)
+                record.save_messages(history)
         status: Status = (
             "failed"
             if any(a.status == "failed" for a in assertions)
@@ -160,4 +189,4 @@ class Verification:
             if all(a.status == "passed" for a in assertions)
             else "error"
         )
-        return Verdict(status, assertions)
+        return Verdict(submission.submission_id, status, assertions)

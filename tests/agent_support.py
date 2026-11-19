@@ -2,6 +2,7 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
@@ -11,7 +12,17 @@ from uiprobe.actions import RunBudget
 from uiprobe.agent import Context, ExecutionAgent
 from uiprobe.browser import Browser
 from uiprobe.case_input import TestCase
-from uiprobe.recording import Recorder
+from uiprobe.observation import CheckpointSubmission, Screenshot
+from uiprobe.recording import Recorder, SessionRecord
+
+
+def begin_verification(
+    record: SessionRecord, test_case: TestCase, screenshot: Screenshot | None
+):
+    evidence = CheckpointSubmission(
+        uuid4().hex, record.session_id, None, tuple(test_case.assertions), screenshot
+    )
+    return evidence, record.begin_submission(evidence)
 
 
 def calls(*items):

@@ -94,14 +94,14 @@ uv run --locked python -m uiprobe --case login-demo/mvp-initial-case.json --conf
 运行配置包含页面、引用值、预算、时限和输出目录；执行与验收共用连接，历史独立。
 标准输出为 SessionResult JSON；passed／failed／error 对应退出码 0／1／2。
 缺少模型配置时返回安全错误且不启动浏览器；外部取消经清理后传播。
-每次运行在 .scratch/uiprobe-mvp/runs 下创建独立目录，保存 events.jsonl、history.json、verification.json、screenshots/ 和 result.json。artifact_paths 列出可用产物，断言关联最终截图。
+每次运行在 .scratch/uiprobe-mvp/runs 下创建独立目录，保存 events.jsonl、执行 history.json、screenshots/ 和 result.json。用 `verdict.submission_id` 定位 `submissions/<submission_id>/`。该目录保存验收输入 `input.json`、原生历史 `history.json` 和实际请求 `requests.jsonl`。验收材料通过截图编号引用已有 PNG，`artifact_paths` 列出可用产物。
 真实模型验收状态见 [执行进度](docs/exec-plans/uiprobe-mvp/progress.md)。离线回归不调用真实模型：
 
 ~~~bash
 uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
 ~~~
 
-运行追踪默认保存到同一产物目录的 trace.json；每次实际模型发送视图保存到 execution-requests.jsonl 和 verification-requests.jsonl。图片引用 screenshots/ 中的 PNG，在线不上传图片。配置 LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY 可启用 Langfuse OTLP 导出；在线不可用不会改变验收判断。退出提交等待最多 2.5 秒，flush 完成不表示远端逐条确认。
+运行追踪默认保存到同一产物目录的 trace.json。执行模型的实际请求保存在 execution-requests.jsonl。验收 span 关联会话、提交和截图编号。配置 LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY 可启用 Langfuse OTLP 导出。在线追踪中的图片用引用表示，导出故障只标记观测不完整。退出提交等待最多 2.5 秒，远端逐条投递状态为 unknown。
 
 
 模型或浏览器故障可通过摘要的 error_id 查找 `diagnostics/<error_id>.json`；工具纠正保存在事件和完整历史中，不直接改变测试结论。流中断的可见部分标记 incomplete，只用于诊断。

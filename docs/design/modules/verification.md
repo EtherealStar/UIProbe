@@ -4,9 +4,9 @@ Verification 在执行 Agent 正常提交之后，根据断言和最终截图判
 
 ## Interface 与输入隔离
 
-应用入口向 Verification 注入验收模型和固定验收指令，模型配置不来自每次运行的 SessionConfig。Session 调用异步 `evaluate(test_case, evidence_screenshot, deadline_at) -> Verdict`，并提供验收阶段的请求及输出纠正额度。
+应用入口向 Verification 注入验收模型和固定验收指令，模型配置不来自每次运行的 SessionConfig。Session 调用异步 `evaluate(submission, deadline_at, record=..., request_limit=..., retry_limit=...) -> Verdict`，传入冻结证据、专属验收记录及本次验收的请求和纠正额度。
 
-Verification 从完整 TestCase 提取 assertions，只把全部断言和同一张最终截图作为业务输入交给视觉模型。execution、TODO、执行历史和 Submission 都不发送。固定指令说明逐项状态、证据要求和输出结构。
+Session 在提交时固定断言和最新已保存的截图。Verification 从冻结证据中读取断言和截图，交给视觉模型。execution、TODO、执行历史和 Submission 都不发送。固定指令说明逐项状态、证据要求和输出结构。
 
 Screenshot 包含实际 PNG 和截图编号；Session 在提交时选择最新成功观察。零动作提交使用初始截图。缺少截图或共享时间已耗尽时不发起模型请求，为断言返回无法完成验收的错误。
 
@@ -27,7 +27,7 @@ Screenshot 包含实际 PNG 和截图编号；Session 在提交时选择最新�
 | failed | 图中存在明确否定预期的反例 |
 | error | 证据不足或判断无法完成，不能推测通过 |
 
-程序检查每个输入断言恰好对应一个结果，无遗漏、重复或未知 ID；状态必须合法，reason 不能空白。模型不用生成 screenshot_id 或总状态：Verification 为每项补上输入截图编号，并计算 Verdict.status。
+程序检查每个输入断言恰好对应一个结果，无遗漏、重复或未知 ID；状态必须合法，reason 不能空白。模型不用生成 screenshot_id 或总状态：Verification 为每项补上输入截图编号，并补充 Verdict.submission_id 和 Verdict.status。
 
 合成规则是：任一项 failed 则 failed；全部 passed 则 passed；其余为 error。合法结果可以同时包含三种逐项状态。程序只检查结构及非空依据，不用关键词判断理由是否支持结论，也不增加第二个模型复核理由。真实视觉判断由验收模型承担。
 
@@ -45,7 +45,7 @@ Screenshot 包含实际 PNG 和截图编号；Session 在提交时选择最新�
 
 验收不消耗浏览器动作额度，模型请求不得超出执行阶段共用的截止时间。一次 evaluate 完成后不拆分断言另行调用，也不恢复执行 Agent。
 
-通过本次运行的 Recorder 保存实际断言输入、最终截图引用、模型输出和格式纠正记录到 verification.json，图片引用已有 PNG，不复制图片。记录与执行 Agent 的 history.json 分离；本地记录失败向 Session 报告，不能把产物写入失败当作视觉判断。
+提交专属记录将断言与截图引用写入 `submissions/<submission_id>/input.json`，将原生消息与格式纠正写入同目录的 `history.json`，将实际请求写入 `requests.jsonl`。图片引用 Session 已保存的 PNG。写入故障向 Session 报告，最终历史保存失败时保留已取得的 Verdict。
 
 ## 已采用的运行依赖接合
 

@@ -181,10 +181,10 @@ class ExecutionAgent:
                         ]
                     )
                 )
-            record.save_messages("execution", context.history, state.screenshot)
+            record.save_messages(context.history, state.screenshot)
             view = context.messages_for_model()
             view[-2 if budget.action_count >= budget.max_actions else -1] = observation
-            record.save_sent_messages("execution", view, state.screenshot)
+            record.save_sent_messages(view, state.screenshot)
             seen = len(view)
             return view
 
@@ -192,9 +192,7 @@ class ExecutionAgent:
             nonlocal seen
             context.history.append(response)
             seen = len(request_context.messages) + 1
-            record.save_messages(
-                "execution", context.history, context.browser_state.screenshot
-            )
+            record.save_messages(context.history, context.browser_state.screenshot)
             return response
 
         agent = FrameworkAgent(
@@ -254,6 +252,4 @@ class ExecutionAgent:
             raise
         finally:
             with record.writing("save_execution_history"):
-                record.save_messages(
-                    "execution", context.history, context.browser_state.screenshot
-                )
+                record.save_messages(context.history, context.browser_state.screenshot)

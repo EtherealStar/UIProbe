@@ -26,6 +26,8 @@ class Execution(StrictValue):
 
 
 class Assertion(StrictValue):
+    model_config = ConfigDict(frozen=True)
+
     id: str
     expected: str
 

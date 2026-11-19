@@ -24,12 +24,17 @@ class Submit:
 
 
 class Judge:
-    async def evaluate(self, case, screenshot, *args, **kwargs):
+    async def evaluate(self, evidence, *args, **kwargs):
+        assert evidence.screenshot is not None
         return Verdict(
+            evidence.submission_id,
             "failed",
             [
                 AssertionResult(
-                    "home", "failed", "Error page visible", screenshot.screenshot_id
+                    "home",
+                    "failed",
+                    "Error page visible",
+                    evidence.screenshot.screenshot_id,
                 )
             ],
         )

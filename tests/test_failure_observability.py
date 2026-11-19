@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 
-from agent_support import PLAN, calls, run_actions
+from agent_support import PLAN, begin_verification, calls, run_actions
 from pydantic_ai.models.function import FunctionModel
 from test_session_input import case
 
@@ -77,11 +77,15 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             record = Recorder().begin("run", directory)
-            verdict = await Verification(FunctionModel(respond)).evaluate(
+            evidence, verification_record = begin_verification(
+                record,
                 TestCase.model_validate(case()),
                 Screenshot("screen-1", b"png", 1, 1),
+            )
+            verdict = await Verification(FunctionModel(respond)).evaluate(
+                evidence,
                 time.monotonic() + 10,
-                record=record,
+                record=verification_record,
                 request_limit=1,
                 retry_limit=1,
             )
@@ -214,11 +218,15 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                     )
 
                 record = Recorder().begin("run", directory)
-                verdict = await Verification(FunctionModel(respond)).evaluate(
+                evidence, verification_record = begin_verification(
+                    record,
                     TestCase.model_validate(case()),
                     None if mode == "missing" else Screenshot("screen-1", b"png", 1, 1),
+                )
+                verdict = await Verification(FunctionModel(respond)).evaluate(
+                    evidence,
                     time.monotonic() + (-1 if mode == "deadline" else 10),
-                    record=record,
+                    record=verification_record,
                     request_limit=3,
                     retry_limit=1,
                 )
@@ -363,15 +371,17 @@ class FailureObservabilityTests(unittest.IsolatedAsyncioTestCase):
                         def __init__(self, outcome: Status):
                             self.outcome: Status = outcome
 
-                        async def evaluate(self, case, screenshot, *args, **kwargs):
+                        async def evaluate(self, evidence, *args, **kwargs):
+                            assert evidence.screenshot is not None
                             return Verdict(
+                                evidence.submission_id,
                                 self.outcome,
                                 [
                                     AssertionResult(
                                         "home",
                                         self.outcome,
                                         "Visible evidence",
-                                        screenshot.screenshot_id,
+                                        evidence.screenshot.screenshot_id,
                                     )
                                 ],
                             )

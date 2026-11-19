@@ -195,7 +195,20 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(
                                 len(list((run / "screenshots").glob("*.png"))), 6
                             )
-                            self.assertTrue((run / "verification.json").exists())
+                            assert result.verdict is not None
+                            submission_dir = (
+                                run / "submissions" / result.verdict.submission_id
+                            )
+                            evidence = json.loads(
+                                (submission_dir / "input.json").read_text()
+                            )
+                            self.assertEqual(
+                                evidence["screenshot_id"], result.last_screenshot_id
+                            )
+                            self.assertTrue((submission_dir / "history.json").is_file())
+                            self.assertTrue(
+                                (submission_dir / "requests.jsonl").is_file()
+                            )
                             trace = json.loads((run / "trace.json").read_text())
                             payload = b"".join(exporter.payloads)
                             self.assertNotIn(b"data:image", payload)

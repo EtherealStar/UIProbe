@@ -45,7 +45,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             agent = AsyncMock()
             agent.execute.return_value = Submission("Done")
             verification = AsyncMock()
-            verification.evaluate.return_value = Verdict("passed", [])
+            verification.evaluate.return_value = Verdict(
+                "test-submission", "passed", []
+            )
             if phase == "initialization":
                 browser.open.side_effect = RuntimeError("private")
             elif phase == "execution":
@@ -160,9 +162,12 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             assert result.verdict is not None
             self.assertEqual(result.verdict.status, "passed")
             self.assertEqual(result.stop_reason, "verification_completed")
-            self.assertTrue(
-                any(Path(p).name == "verification.json" for p in result.artifact_paths)
+            assert result.verdict is not None
+            submission_dir = (
+                Path(directory, result.session_id, "submissions")
+                / result.verdict.submission_id
             )
+            self.assertTrue((submission_dir / "history.json").is_file())
 
     async def test_real_browser_faults_stop_execution_without_verification(self):
         from agent_support import PLAN, calls
@@ -258,7 +263,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             agent = AsyncMock()
             agent.execute.return_value = Submission("Done")
             verification = AsyncMock()
-            verification.evaluate.return_value = Verdict("passed", [])
+            verification.evaluate.return_value = Verdict(
+                "test-submission", "passed", []
+            )
             try:
                 async with asyncio.timeout(7):
                     result = await Session(
@@ -304,7 +311,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             agent = AsyncMock()
             agent.execute.return_value = Submission("Done")
             verification = AsyncMock()
-            verification.evaluate.return_value = Verdict("passed", [])
+            verification.evaluate.return_value = Verdict(
+                "test-submission", "passed", []
+            )
             task = asyncio.create_task(
                 Session(
                     browser_factory=lambda: browser,

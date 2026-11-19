@@ -13,6 +13,7 @@
 | TodoItem | Context | 非空白描述与计划状态 |
 | Screenshot / BrowserState | Browser 产生，Context 持有最新观察 | 实际图片与同次观察尺寸 |
 | Submission | Agent | 正常最终输出，不表达权威验收结论 |
+| CheckpointSubmission | Session | 固定的验收断言、截图及提交关联 |
 | AssertionResult / Verdict | Verification | 逐项断言判断和程序合成的总状态 |
 | SessionError / SessionResult | Session | 阶段故障及整次运行结果 |
 | SessionEvent | Recorder | 带运行与调用关联的落盘事实 |
@@ -96,6 +97,13 @@ Context 仅是当前运行的内存状态，产物用于复盘，不支持中断
 Submission:
     text: str
 
+CheckpointSubmission:
+    submission_id: str
+    session_id: str
+    checkpoint_id: str | None
+    assertions: immutable sequence[Assertion]
+    screenshot: Screenshot | None
+
 AssertionResult:
     assertion_id: str
     status: passed | failed | error
@@ -103,6 +111,7 @@ AssertionResult:
     screenshot_id: str | None
 
 Verdict:
+    submission_id: str
     status: passed | failed | error
     assertions: list[AssertionResult]
 
@@ -124,7 +133,7 @@ SessionResult:
     errors: list[SessionError]
 ```
 
-正常最终文本形成 Submission。Session 随后调用一次 evaluate，模型只收到全部 assertions 和同一张最新截图，不收到 execution、TODO、执行历史或提交说明。
+正常最终文本形成 Submission。Session 为本次验收生成 submission_id，固定断言和最后一张已保存的截图，再调用一次 evaluate。当前终态输入的 checkpoint_id 为空。验收模型只收到冻结的断言和截图，不收到 execution、TODO、执行历史或提交说明。
 
 验收模型只输出 assertion_id、status、reason。程序检查 ID 一一对应、状态合法、依据非空，补截图标识并计算总状态。passed 是可见支持，failed 是明确反例，error 是无法判断。任一 failed 则总判定 failed，全部 passed 才 passed，其余 error。
 
@@ -138,6 +147,6 @@ stop_reason 保留主流程停止原因；errors 记录阶段、类别和安全�
 
 每次运行独占 output_dir/session_id，目录存在时报错，不覆盖。SessionEvent 使用实际日期时间、session_id 和事件类型；工具事件以 call_id 配对，页面动作另带 action_index 和截图关联。并发按实际开始与完成记录。
 
-先保存 PNG 再写引用事件。history.json 保存执行历史，verification.json 单独保存验收输入、输出和纠正，图片引用 screenshots 内已有 PNG；result.json 保存最终结果。本地不恢复执行。摘要与错误不回显实际输入值，在线遥测不含正文或图片；实际页面截图不承诺自动脱敏。
+先保存 PNG 再写引用事件。history.json 保存执行历史。验收输入、原生历史和实际请求保存在 `submissions/<submission_id>/`。验收诊断和追踪使用同一 submission_id，图片引用 screenshots 内已有 PNG。result.json 保存最终结果。本地不恢复执行。摘要与错误不回显实际输入值，在线遥测不含正文或图片；实际页面截图不承诺自动脱敏。
 
 M1 的错误标识、诊断布局与首批错误码见 [错误处理契约](modules/error-handling.md#m1-已采用的本地诊断契约2026-11-14)。诊断保存于 diagnostics/<error_id>.json，由 Recorder 写入。

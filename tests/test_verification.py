@@ -2,10 +2,12 @@ import tempfile
 import time
 import unittest
 
+from agent_support import begin_verification
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 from uiprobe.case_input import TestCase
+from uiprobe.error_handling import LocatedFailure
 from uiprobe.observation import Screenshot
 from uiprobe.recording import Recorder
 from uiprobe.verification import Verification
@@ -44,11 +46,11 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     "assertions": [{"id": "home", "expected": "Home visible"}],
                 }
             )
+            evidence, verification_record = begin_verification(record, case, screenshot)
             verdict = await Verification(FunctionModel(respond)).evaluate(
-                case,
-                screenshot,
+                evidence,
                 time.monotonic() + 10,
-                record=record,
+                record=verification_record,
                 request_limit=3,
                 retry_limit=2,
             )
@@ -102,11 +104,13 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                     }
                 )
                 record = Recorder().begin("test", directory)
+                evidence, verification_record = begin_verification(
+                    record, case, Screenshot("s", b"png", 1, 1)
+                )
                 result = await Verification(FunctionModel(respond)).evaluate(
-                    case,
-                    Screenshot("s", b"png", 1, 1),
+                    evidence,
                     time.monotonic() + 10,
-                    record=record,
+                    record=verification_record,
                     request_limit=3,
                     retry_limit=1,
                 )
@@ -155,11 +159,15 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                             "assertions": [{"id": "home", "expected": "Home"}],
                         }
                     )
-                    result = await Verification(FunctionModel(respond)).evaluate(
+                    evidence, verification_record = begin_verification(
+                        Recorder().begin("test", directory),
                         case,
                         Screenshot("s", b"png", 1, 1),
+                    )
+                    result = await Verification(FunctionModel(respond)).evaluate(
+                        evidence,
                         time.monotonic() + 10,
-                        record=Recorder().begin("test", directory),
+                        record=verification_record,
                         request_limit=2,
                         retry_limit=1,
                     )
@@ -187,11 +195,15 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
                         "assertions": [{"id": "home", "expected": "Home"}],
                     }
                 )
-                result = await Verification(FunctionModel(respond)).evaluate(
+                evidence, verification_record = begin_verification(
+                    Recorder().begin("test", directory),
                     case,
                     None if mode == "missing" else Screenshot("s", b"png", 1, 1),
+                )
+                result = await Verification(FunctionModel(respond)).evaluate(
+                    evidence,
                     time.monotonic() + (-1 if mode == "expired" else 10),
-                    record=Recorder().begin("test", directory),
+                    record=verification_record,
                     request_limit=1,
                     retry_limit=1,
                 )
@@ -204,27 +216,49 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_recording_failure_propagates(self):
         from unittest.mock import patch
 
-        with tempfile.TemporaryDirectory() as directory:
-
-            async def respond(messages, info):
-                return ModelResponse(parts=[])
-
-            case = TestCase.model_validate(
-                {
-                    "execution": {"goal": "private", "instructions": []},
-                    "assertions": [{"id": "home", "expected": "Home"}],
-                }
-            )
-            record = Recorder().begin("test", directory)
-            with patch.object(
-                record, "save_messages", side_effect=OSError("disk unavailable")
+        for method, operation in (
+            ("save_input", "save_verification_input"),
+            ("save_messages", "save_verification_history"),
+            ("save_sent_messages", "save_verification_requests"),
+        ):
+            with (
+                self.subTest(method=method),
+                tempfile.TemporaryDirectory() as directory,
             ):
-                with self.assertRaises(OSError):
+                requests = []
+
+                async def respond(messages, info):
+                    requests.append(messages)
+                    return ModelResponse(parts=[])
+
+                case = TestCase.model_validate(
+                    {
+                        "execution": {"goal": "private", "instructions": []},
+                        "assertions": [{"id": "home", "expected": "Home"}],
+                    }
+                )
+                evidence, record = begin_verification(
+                    Recorder().begin("test", directory),
+                    case,
+                    Screenshot("s", b"png", 1, 1),
+                )
+                with (
+                    patch.object(
+                        record, method, side_effect=OSError("disk unavailable")
+                    ),
+                    self.assertRaises(LocatedFailure) as failure,
+                ):
                     await Verification(FunctionModel(respond)).evaluate(
-                        case,
-                        Screenshot("s", b"png", 1, 1),
+                        evidence,
                         time.monotonic() + 10,
                         record=record,
                         request_limit=1,
                         retry_limit=1,
                     )
+                self.assertEqual(requests, [])
+                self.assertEqual(failure.exception.summary.phase, "recording")
+                self.assertEqual(failure.exception.summary.operation, operation)
+                self.assertEqual(
+                    failure.exception.diagnostic["submission_id"],
+                    evidence.submission_id,
+                )

@@ -13,7 +13,7 @@ from .browser import Browser
 from .case_input import InputError, TestCase, prepare
 from .error_handling import SessionError, describe, locate
 from .observability import bind_record, fact, traced
-from .observation import Submission, Verdict
+from .observation import CheckpointSubmission, Submission, Verdict
 from .recording import Recorder
 
 
@@ -140,20 +140,33 @@ class Session:
                             retry_limit=prepared.config.tool_retry_limit,
                         )
                         assert result.submission is not None
-                        record.append(
-                            {"type": "submission", "text": result.submission.text}
+                        evidence = CheckpointSubmission(
+                            submission_id=uuid4().hex,
+                            session_id=result.session_id,
+                            checkpoint_id=None,
+                            assertions=tuple(prepared.test_case.assertions),
+                            screenshot=context.browser_state.screenshot,
                         )
                         phase = "verification"
+                        submission_record = record.begin_submission(evidence)
+                        with submission_record.writing("append_submission"):
+                            submission_record.append(
+                                {"type": "submission", "text": result.submission.text}
+                            )
                         if time.monotonic() >= deadline:
                             raise TimeoutError
-                        result.verdict = await self.verification.evaluate(
-                            prepared.test_case,
-                            context.browser_state.screenshot,
-                            deadline,
-                            record=record,
-                            request_limit=prepared.config.verification_request_limit,
-                            retry_limit=prepared.config.verification_retry_limit,
-                        )
+                        try:
+                            result.verdict = await self.verification.evaluate(
+                                evidence,
+                                deadline,
+                                record=submission_record,
+                                request_limit=prepared.config.verification_request_limit,
+                                retry_limit=prepared.config.verification_retry_limit,
+                            )
+                        finally:
+                            for error, diagnostic in submission_record.failures:
+                                result.errors.append(error)
+                                diagnostics.append(diagnostic)
                         assert result.verdict is not None
                         result.status = result.verdict.status
                         result.stop_reason = "verification_completed"
@@ -186,13 +199,6 @@ class Session:
                         else "run_failed",
                         "Session operation failed",
                     )
-                    if record is not None:
-                        # Verification may already have caught its model failure.
-                        # Evidence writes must follow that original failure.
-                        for deferred_error, deferred_diagnostic in record.failures:
-                            if deferred_error.phase != "recording":
-                                result.errors.append(deferred_error)
-                                diagnostics.append(deferred_diagnostic)
                     result.errors.append(error)
                     diagnostics.append(diagnostic)
                 finally:

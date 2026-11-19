@@ -4,7 +4,7 @@ Recorder 保存一次 Session 的可回查材料，包括执行 Agent 历史、�
 
 ## Interface 与会话记录
 
-Session 调用 `begin(session_id, output_dir) -> SessionRecord`。SessionRecord 表示本次运行独立的记录，执行路径使用 `append(event, screenshot?)` 增量保存，最终使用 `finish(result, history) -> artifact_paths` 收敛结果与完整历史。验收输入输出以验收事件交给同一记录对象，由 Recorder 写入单独文件。
+Session 调用 `begin(session_id, output_dir) -> SessionRecord`。SessionRecord 表示本次运行独立的记录，执行路径使用 `append(event, screenshot?)` 增量保存，最终使用 `finish(result, history) -> artifact_paths` 收敛结果与完整历史。Session 用 `begin_submission(submission)` 为每次验收创建专属记录。句柄固定会话、提交与截图关联，由 Recorder 按提交保存材料。
 
 Recorder 独占创建 output_dir/session_id，目录已经存在就报错，不覆盖、不清空。每次运行由 Session 生成唯一标识，同一用例的多次运行各保留一个目录。
 
@@ -13,7 +13,11 @@ output_dir/
   session_id/
     events.jsonl
     history.json
-    verification.json
+    submissions/
+      submission_id/
+        input.json
+        history.json
+        requests.jsonl
     screenshots/
     result.json
 ```
@@ -24,13 +28,13 @@ output_dir/
 |---|---|
 | events.jsonl | 会话开始、观察、TODO 替换、工具开始与结束、校验反馈、提交、验收、错误及终止；每行一个 JSON 对象 |
 | history.json | 执行 Agent 完整框架消息的持久化表达，包括文本、调用、结果和图片编号关联 |
-| verification.json | 验收实际收到的断言、最终图片引用、模型返回及格式纠正过程，与执行历史分开 |
+| submissions/<submission_id>/ | 验收断言与截图引用、原生验收历史和格式纠正、实际请求视图 |
 | screenshots/ | 全部实际取得的 PNG，按 screenshot_id 关联，不因模型请求过滤而删除旧图 |
 | result.json | SessionResult，包括 Submission、逐项 Verdict、终止原因、错误列表与可用产物路径 |
 
 验收图片引用 screenshots 中的现有 PNG，不额外复制。history 使用框架消息类型进行序列化，不建立另一套运行时消息协议。
 
-事件带 session_id、类型和实际日期时间。工具事件以 call_id 关联请求和结果；浏览器动作另有 action_index、输入和输出截图编号。并发工具按实际开始与完成记录，不假定模型提出顺序等于完成顺序。
+事件带 session_id、类型和实际日期时间。提交事件及验收诊断记录 submission_id 和对应截图编号。工具事件以 call_id 关联请求和结果；浏览器动作另有 action_index、输入和输出截图编号。并发工具按实际开始与完成记录，不假定模型提出顺序等于完成顺序。
 
 先保存图片，再写引用它的事件。点击记录图片坐标和实际 CSS 坐标；fill_value 只记录引用名，不保存实际值。TODO 的每次整表替换均记录，不能只留最后一份。
 

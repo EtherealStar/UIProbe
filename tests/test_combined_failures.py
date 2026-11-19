@@ -19,7 +19,7 @@ from uiprobe.agent import ExecutionAgent
 from uiprobe.browser import Browser
 from uiprobe.model_service import ModelServiceConfig
 from uiprobe.observability import run_trace
-from uiprobe.recording import Recorder, SessionRecord
+from uiprobe.recording import Recorder, SessionRecord, SubmissionRecord
 from uiprobe.session import Session
 from uiprobe.verification import Verification
 
@@ -71,10 +71,10 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                     raise OSError("failure log unavailable")
                 super().append(event)
 
-            def save_messages(self, role, messages, screenshot):
+            def save_messages(self, messages, screenshot):
                 if self.broken:
                     raise OSError("history unavailable")
-                super().save_messages(role, messages, screenshot)
+                super().save_messages(messages, screenshot)
 
             def finish(self, result, history):
                 raise OSError("result unavailable")
@@ -135,31 +135,28 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_verification_failure_survives_diagnostic_and_history_save_failure(
         self,
     ):
-        class BrokenRecord(SessionRecord):
+        class BrokenSubmission(SubmissionRecord):
             broken = False
 
             def save_diagnostic(self, diagnostic):
                 self.broken = True
                 raise OSError("diagnostics unavailable")
 
-            def save_messages(self, role, messages, screenshot):
-                if role == "verification" and self.broken:
+            def save_messages(self, messages):
+                if self.broken:
                     raise OSError("verification history unavailable")
-                super().save_messages(role, messages, screenshot)
-
-        class BrokenRecorder(Recorder):
-            def begin(self, session_id, output_dir):
-                record = super().begin(session_id, output_dir)
-                return BrokenRecord(session_id, record.directory)
+                super().save_messages(messages)
 
         def invalid(messages, info):
             raise RuntimeError("verification transport failed")
 
-        with tempfile.TemporaryDirectory() as directory:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("uiprobe.recording.SubmissionRecord", BrokenSubmission),
+        ):
             cfg = config(directory)
             cfg["entry_url"] = self.url
             result = await Session(
-                recorder=BrokenRecorder(),
                 agent=ExecutionAgent(FunctionModel(response)),
                 verification=Verification(FunctionModel(invalid)),
             ).run(json.dumps(case()), cfg)
@@ -167,7 +164,25 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.status, "error")
             self.assertEqual(result.errors[0].phase, "verification")
             self.assertEqual(result.errors[0].code, "model_request_failed")
-            self.assertTrue(any(e.phase == "recording" for e in result.errors))
+            self.assertEqual(
+                [e.operation for e in result.errors],
+                [
+                    "evaluate_assertions",
+                    "save_verification_failure",
+                    "save_verification_history",
+                ],
+            )
+            assert result.verdict is not None
+            diagnostic = json.loads(
+                (
+                    Path(directory, result.session_id, "diagnostics")
+                    / f"{result.errors[0].error_id}.json"
+                ).read_text()
+            )
+            self.assertIn(
+                result.errors[0].error_id, result.verdict.assertions[0].reason
+            )
+            self.assertEqual(diagnostic["submission_id"], result.verdict.submission_id)
             self.assertTrue(all(Path(p).exists() for p in result.artifact_paths))
 
     async def test_application_close_failure_keeps_verdict_and_updates_snapshot(self):
@@ -294,30 +309,25 @@ class CombinedFailureTests(unittest.IsolatedAsyncioTestCase):
                 verification.evaluate.assert_not_awaited()
 
     async def test_passed_verdict_survives_final_verification_history_failure(self):
-        class FinalHistoryFailure(SessionRecord):
-            def save_messages(self, role, messages, screenshot):
-                if role == "verification" and any(
-                    getattr(m, "kind", None) == "response" for m in messages
-                ):
+        class FinalHistoryFailure(SubmissionRecord):
+            def save_messages(self, messages):
+                if any(getattr(m, "kind", None) == "response" for m in messages):
                     # Fail only after the framework has produced a complete result.
                     self.verification_writes = (
                         getattr(self, "verification_writes", 0) + 1
                     )
                     if self.verification_writes > 1:
                         raise OSError("final verification history unavailable")
-                super().save_messages(role, messages, screenshot)
+                super().save_messages(messages)
 
-        class FinalHistoryRecorder(Recorder):
-            def begin(self, session_id, output_dir):
-                record = super().begin(session_id, output_dir)
-                return FinalHistoryFailure(session_id, record.directory)
-
-        with tempfile.TemporaryDirectory() as directory:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("uiprobe.recording.SubmissionRecord", FinalHistoryFailure),
+        ):
             cfg = config(directory)
             cfg["entry_url"] = self.url
             model = FunctionModel(response)
             result = await Session(
-                recorder=FinalHistoryRecorder(),
                 agent=ExecutionAgent(model),
                 verification=Verification(model),
             ).run(json.dumps(case()), cfg)

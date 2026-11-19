@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from .case_input import Assertion
+
 Status = Literal["passed", "failed", "error"]
 
 
@@ -27,6 +29,15 @@ class Submission:
 
 
 @dataclass(frozen=True)
+class CheckpointSubmission:
+    submission_id: str
+    session_id: str
+    checkpoint_id: str | None
+    assertions: tuple[Assertion, ...]
+    screenshot: Screenshot | None
+
+
+@dataclass(frozen=True)
 class AssertionResult:
     assertion_id: str
     status: Status
@@ -36,5 +47,6 @@ class AssertionResult:
 
 @dataclass(frozen=True)
 class Verdict:
+    submission_id: str
     status: Status
     assertions: list[AssertionResult]

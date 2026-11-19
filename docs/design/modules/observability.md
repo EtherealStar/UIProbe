@@ -45,7 +45,7 @@ Agent 是由模型和工具循环驱动、负责规划与操作页面的执行�
 2. 初始化记录浏览器启动、入口导航与首图。导航事实包含可取得的主文档响应状态、最终网址和截图关联；HTTP 4xx／5xx 页面在导航与首图成功时继续测试。
 3. 执行 Agent 记录完整指令、模型实际发送文本、工具定义、响应和可取得的 token 用量；token 用量是模型返回的输入／输出计量，不推算不可见数据。工具记录原始参数、实际结果与纠正反馈，包括框架在项目工具包装层之前拒绝的调用。
 4. 浏览器动作关联工具 call_id（框架调用标识）、action_index（已派发动作的会话内计数），以及操作前后的 screenshot_id（本地截图标识）。预检、实际派发和后续截图必须可区分。
-5. 正常 Submission 后进入独立验收，记录验收实际输入、格式纠正与 Verdict。执行与验收位于同一 trace 下各自的作用域，观测不将执行历史传入验收模型。
+5. 正常 Submission 后进入独立验收，记录验收实际输入、格式纠正与 Verdict。执行与验收位于同一 trace 下各自的作用域。每次验收的子 span 固定关联 session_id、submission_id 和可用的 screenshot_id。
 6. 收尾记录浏览器释放、本地最终保存及应用持有客户端的关闭。根追踪覆盖这些业务收尾后，再处理观测自身的导出；不把 Langfuse 导出请求递归记作新的业务运行。
 
 Pydantic AI 原生追踪负责 Agent、模型请求、工具和框架纠正；项目补充框架之外的 Browser、Recorder 与生命周期操作。同一模型调用只有一份权威记录和用量归属，不额外创建重复的模型调用记录。SDK 内部连接重试只记录其原生机制实际暴露的事实，不为补观测重写重试循环。
@@ -90,7 +90,7 @@ Pydantic AI 原生追踪负责 Agent、模型请求、工具和框架纠正；�
 
 应用使用独立 OTel TracerProvider，不修改全局 provider。根作用域早于文件读取，覆盖 Session 和模型客户端关闭；Session 单独调用时建立自己的根。原生 Agent.instrument 使用锁定版本 InstrumentationSettings，完整文本开启、include_binary_content=False；StreamingModel 聚合后的响应由原生能力记录，不再套一层模型 instrumentation。
 
-Recorder 保存 trace.json（trace_id、原生及项目 spans、可知在线告警）、execution-requests.jsonl 和 verification-requests.jsonl（每次实际发送视图，图片替换为 screenshot 引用）。原有历史、PNG、验收及结果布局保留。事件关联 trace_id；工具保留 call_id、参数、实际结果，派发事件保留 action_index 和剩余时间，浏览器记录导航 HTTP 状态、最终 URL 与截图尺寸。HTTP 4xx/5xx 不独立导致失败。
+Recorder 保存 trace.json（trace_id、原生及项目 spans、可知在线告警）。执行模型的实际请求保存于 execution-requests.jsonl，验收模型的实际请求保存于 `submissions/<submission_id>/requests.jsonl`。两处请求均使用截图编号引用已有 PNG。事件关联 trace_id；工具保留 call_id、参数、实际结果，派发事件保留 action_index 和剩余时间，浏览器记录导航 HTTP 状态、最终 URL 与截图尺寸。HTTP 4xx/5xx 不独立导致失败。
 
 在线采用 Langfuse OTLP HTTP 接口（LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY），未提供任一 Langfuse 配置时仅本地记录；部分配置视为观测配置故障。BatchSpanProcessor 批量投递，HTTP timeout=2 秒，退出在独立 daemon 线程 flush + shutdown，主线程 join 最多等待 2500ms（锁定 SDK 忽略原生 timeout 参数）；不逐条确认远端。初始化及 exporter 异常隔离为观测告警。跨阶段故障／取消组合仍由后续批次完成。
 
