@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from pydantic_core import to_jsonable_python
@@ -67,6 +67,7 @@ class Dependencies:
     budget: RunBudget
     record: SessionRecord
     accept_checkpoint: AcceptCheckpoint
+    submitted_in_response: bool = False
 
 
 tools = FunctionToolset[Dependencies]()
@@ -75,7 +76,7 @@ Integer = Annotated[int, Field(strict=True)]
 Duration = Annotated[int, Field(strict=True, gt=0)]
 
 
-@tools.tool(metadata={"refresh_browser_state": False})
+@tools.tool(sequential=True, metadata={"refresh_browser_state": False})
 async def replace_todo(ctx: RunContext[Dependencies], items: list[TodoItem]) -> dict:
     """Replace the entire TODO plan; create a nonempty plan before browser actions."""
     context = ctx.deps.context
@@ -127,14 +128,12 @@ async def wait(ctx: RunContext[Dependencies], duration_ms: Duration) -> dict:
 
 
 @tools.tool(sequential=True)
-async def submit_checkpoint(ctx: RunContext[Dependencies], checkpoint_id: str) -> dict:
+async def submit_checkpoint(
+    ctx: RunContext[Dependencies], checkpoint_id: str
+) -> CheckpointReceipt:
     """Submit the latest saved screenshot for the current checkpoint."""
     deps = ctx.deps
-    receipt = deps.accept_checkpoint(
-        checkpoint_id, deps.context.browser_state.screenshot
-    )
-    deps.context.submitted = True
-    return asdict(receipt)
+    return deps.accept_checkpoint(checkpoint_id, deps.context.browser_state.screenshot)
 
 
 class ActionSummary(TypedDict, total=False):
@@ -178,8 +177,11 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 raise TimeoutError
             if d.context.submitted:
                 raise ModelRetry(
-                    "The checkpoint has already been submitted. Return final text."
+                    "All checkpoints have been submitted. Return final text."
                 )
+            refresh = (tool.tool_def.metadata or {}).get("refresh_browser_state")
+            if d.submitted_in_response and (refresh or name == "submit_checkpoint"):
+                raise ModelRetry("Read the submission receipt before continuing.")
             if (
                 name != "submit_checkpoint"
                 and d.budget.action_count >= d.budget.max_actions
@@ -187,7 +189,7 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 raise ModelRetry(
                     "Action budget exhausted. Submit the current evidence or return final text."
                 )
-            if (tool.tool_def.metadata or {}).get("refresh_browser_state"):
+            if refresh:
                 if not d.context.plan_created:
                     raise ModelRetry("Create a nonempty TODO before browser actions")
                 result = await super().call_tool(name, tool_args, ctx, tool)
@@ -236,6 +238,10 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 )
             raise LocatedFailure(error, diagnostic) from exc
         else:
+            receipt = None
+            if isinstance(result, CheckpointReceipt):
+                receipt = result
+                result = to_jsonable_python(receipt)
             with d.record.writing("append_tool_result"):
                 d.record.append(
                     {"type": "tool_finished", "status": "completed", **event, **result}
@@ -245,6 +251,12 @@ class ActionToolset(WrapperToolset[Dependencies]):
                 call_id=ctx.tool_call_id or "",
                 result=json.dumps(result),
             )
+            if receipt is not None:
+                d.submitted_in_response = True
+                if receipt.next_checkpoint is None:
+                    d.context.submitted = True
+                else:
+                    d.context.checkpoint = receipt.next_checkpoint
             return result
         with d.record.writing("append_tool_rejection"):
             d.record.append(

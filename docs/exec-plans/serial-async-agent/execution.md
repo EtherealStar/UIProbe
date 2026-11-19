@@ -1,6 +1,6 @@
 # Execution
 
-本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../.scratch/serial-async-agent/issues/)。01—03 已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
+本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../.scratch/serial-async-agent/issues/)。01—06 已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
 
 ## 票据与阻塞关系
 
@@ -9,15 +9,15 @@
 | 01（已完成） | 隔离现有验收材料与追踪归属 | 无 | M1 |
 | 02（已完成） | 新格式单检查点显式提交并返回批次结果 | 01 | M2 |
 | 03（已完成） | 整批预检后串行运行并隔离 Case 配置 | 02 | M2 |
-| 04 | 同一循环逐段提交并有界异步验收 | 02 | M3 |
-| 05 | 动作后提交与跨阶段预算正确生效 | 04 | M3 |
-| 06 | 执行和单项验收故障各自收敛 | 04 | M3 |
+| 04（已完成） | 同一循环逐段提交并有界异步验收 | 02 | M3 |
+| 05（已完成） | 动作后提交与跨阶段预算正确生效 | 04 | M3 |
+| 06（已完成） | 执行和单项验收故障各自收敛 | 04 | M3 |
 | 07 | 后台记录故障主动停止当前及后续 Case | 03、04 | M4 |
 | 08 | 硬截止时间与取消快照跨批次收尾 | 03、04 | M4 |
 | 09 | 批次资源及追踪收尾故障归属正确 | 03 | M4 |
 | 10 | CLI 样例、组合回归与真实模型验收 | 05、06、07、08、09 | M5 |
 
-只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。当前可执行票据为 04 和 09；若并行开发不同切片，接口变更仍需先同步，不以同一源文件为理由伪造业务阻塞边。
+只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。当前可执行票据为 07、08 和 09；若并行开发不同切片，接口变更仍需先同步，不以同一源文件为理由伪造业务阻塞边。
 
 ## M1：隔离现有验收材料与追踪归属（已完成）
 
@@ -55,9 +55,9 @@
 
 验证：新增计划测试 `test_suite_input.py`、`test_suite_runner.py`，经真实本地页面验证状态隔离、顺序及覆盖，模型使用受控响应。
 
-## M3：同一执行循环逐段提交并异步验收
+## M3：同一执行循环逐段提交并异步验收（已完成）
 
-### Batch 04：逐段公开、冻结提交及有界协调
+### Batch 04：逐段公开、冻结提交及有界协调（已完成）
 
 在 `session.py` 的 run 局部状态中维护完整账本、验收登记与并发上限；Context 只持有第一阶段及后来成功回执。沿一次 Agent.execute 延续 TODO、原生历史和预算，不为每阶段重建 Agent。按 [提交成立](../../design/modules/runner.md#提交成立与阶段推进) 排列保存、登记、推进及回执；回执失败保留已成立的提交。
 
@@ -69,7 +69,7 @@
 
 验证：新增计划测试 `test_checkpoint_pipeline.py`，贯通真实本地页面、原生工具响应及专属验收材料。用 asyncio 同步点与请求计数断言顺序，不凭总耗时或短 sleep 推断并发。
 
-### Batch 05：动作后证据与整条 Case 预算
+### Batch 05：动作后证据与整条 Case 预算（已完成）
 
 在现有 `actions.py` 包装层中区分动作、TODO、提交三种能力；模型可见工具表和实际调用入口均执行相同限制。保留 Browser 派发计数、操作后截图保存和观察更新，提交不扣动作、不重拍；同响应动作后提交绑定该动作保存的新图。
 
@@ -77,9 +77,9 @@
 
 完成标准：最后一次动作仍可提交，派发后失败不重放／不退额度；阶段切换不能刷新额度；请求耗尽保留工具结果历史且无 ExecutionOutcome；每次发送仅最新 PNG，完整历史仍保留全部原生配对和图片引用。
 
-验证：迁移 `test_agent_budget.py`、`test_agent_click.py`、`test_context_recording.py`；新增计划测试 `test_checkpoint_budget.py`，覆盖同响应剩余调用和两个检查点的额度边界。
+验证覆盖 `test_agent_budget.py`、`test_agent_click.py` 和 `test_context_recording.py` 的现有行为，以及 `test_checkpoint_budget.py` 的同响应剩余调用和两个检查点的额度边界。
 
-### Batch 06：执行结束与局部验收故障独立
+### Batch 06：执行结束与局部验收故障独立（已完成）
 
 沿生产 Session 验证并完善提前最终文本、执行模型／派发后故障、单项验收模型故障、合法 failed／证据不足 error 的不同处置。已有提交在执行故障后仍验收；当前未提交为 not_submitted、未来未公开为 not_reached，不给它们伪造 Verdict。验收失败不回传执行、不取消同级、不重试到通过。
 
@@ -140,6 +140,8 @@ uv run python -m unittest discover -s tests -p 'test_submission_records.py' -v
 uv run python -m unittest discover -s tests -p 'test_suite_input.py' -v
 uv run python -m unittest discover -s tests -p 'test_suite_runner.py' -v
 uv run python -m unittest discover -s tests -p 'test_checkpoint_pipeline.py' -v
+uv run python -m unittest discover -s tests -p 'test_checkpoint_budget.py' -v
+uv run python -m unittest discover -s tests -p 'test_checkpoint_failures.py' -v
 uv run python -m unittest discover -s tests -p 'test_async_recording_failure.py' -v
 uv run python -m unittest discover -s tests -p 'test_async_lifecycle.py' -v
 uv run python -m unittest discover -s tests -p 'test_suite_finalization.py' -v

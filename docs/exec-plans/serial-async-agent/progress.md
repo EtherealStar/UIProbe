@@ -2,10 +2,10 @@
 
 ## Current State
 
-- Status：in progress，M1—M2／01—03 已完成。
-- Current milestone：M3，票据 04 可执行。批次资源收尾票据 09 的直接前置也已完成。
+- Status：in progress，M1—M3／01—06 已完成。
+- Current milestone：M4，后台记录故障、硬截止时间与取消交接、批次资源收尾的直接前置均已完成。
 - Last updated：2026-11-20，Asia/Shanghai。
-- Tracker：本地文件。01—03 为 completed，04—10 为 ready-for-agent，执行顺序见 [依赖表](execution.md#票据与阻塞关系)。
+- Tracker：本地文件。01—06 为 completed，07—10 为 ready-for-agent，执行顺序见 [依赖表](execution.md#票据与阻塞关系)。
 
 ## Milestones And Batches
 
@@ -14,10 +14,10 @@
 - [x] M2：新格式单检查点与串行批次可运行。
   - [x] 02：显式提交的首条完整路径与 SuiteResult。
   - [x] 03：完整预检、覆盖配置和 Case 串行。
-- [ ] M3：同一执行循环逐段提交并异步验收。
-  - [ ] 04：逐段公开、响应屏障、有界并发与冻结证据。
-  - [ ] 05：动作后提交与跨阶段预算。
-  - [ ] 06：提前结束、执行及单项验收故障独立收敛。
+- [x] M3：同一执行循环逐段提交并异步验收。
+  - [x] 04：逐段公开、响应屏障、有界并发与冻结证据。
+  - [x] 05：动作后提交与跨阶段预算。
+  - [x] 06：提前结束、执行及单项验收故障独立收敛。
 - [ ] M4：异步故障与批次收尾可信。
   - [ ] 07：后台必要记录故障主动停机和批次停调。
   - [ ] 08：硬截止时间、取消快照交接及有界保存。
@@ -46,11 +46,11 @@
 - [十张已发布工单](../../../.scratch/serial-async-agent/issues/)
 - [已完成的票据 01](../../../.scratch/serial-async-agent/issues/01-isolated-verification-records.md)
 - [已完成的显式检查点提交](../../../.scratch/serial-async-agent/issues/02-explicit-single-checkpoint.md)与[批次预检和串行调度](../../../.scratch/serial-async-agent/issues/03-serial-suite-input.md)
-- [接续的逐段公开与有界验收](../../../.scratch/serial-async-agent/issues/04-async-checkpoint-pipeline.md)
+- [已完成的逐段公开与有界验收](../../../.scratch/serial-async-agent/issues/04-async-checkpoint-pipeline.md)
 
 ## Outcomes And Retrospective
 
-单 Case 和有序批次使用同一入口。批次先预检，随后串行运行合法 Case。执行模型可显式提交单检查点，退出后开始释放 Browser 并验收已冻结证据。逐段公开、有界异步验收及真实模型演示按后续里程碑验收。
+单 Case 和有序批次使用同一入口。批次先预检，随后串行运行合法 Case。执行模型在同一循环逐段提交，检查点验收可以与后续页面操作重叠。执行退出后开始释放 Browser，会话在验收和清理全部结束后返回。后台必要记录故障的主动停机、取消快照交接、批次收尾及真实模型演示由后续里程碑验收。
 
 ## 2026-11-15：工单发布
 
@@ -78,3 +78,14 @@
 - 本阶段的验收由本地 Chromium 和受控模型建立。多检查点逐段公开、受并发限制的验收，以及真实模型演示保留给后续批次。
 - 全量 `uv run python -m unittest discover -s tests -v` 发现并运行 87 项，63.718 秒，全部通过。初始化诊断的 4 项定向测试也通过。
 - `uv run ruff check .`、`uv run ruff format --check .`（73 个文件）、`uv run pyright`（0 errors）、`git diff --check` 和 CLI `--help` 均通过。计划和工单的 14 份文档中，49 个本地链接的目标路径在当前工作区可用。
+
+## 2026-11-20 逐段提交与异步验收实施证据
+
+- 一个执行循环保留 TODO、动作额度、模型请求与工具历史。成功提交后通过原生工具回执公开下一检查点。同一响应内剩余页面动作和提交被拒绝，最后一次提交后禁用所有工具。
+- Session 在回执前保存冻结断言和截图引用，并登记验收。验收并发默认 1，可配置为 2 或更高，排队和执行共用 Case 截止时间。真实本地 Chromium 和受控模型的同步点证明验收槽位占满时仍可执行和收到回执。落盘事件证明验收可以乱序完成，最终结果仍按声明顺序，后台验收 span 始终归属 Session。
+- 请求与工具额度跨阶段累积。动作耗尽后仍可用最后一次保存的截图提交。每份验收分别使用其请求和纠正额度。超过执行额度时保留原生工具响应及截图引用，Case 无最终执行文本。
+- 提前结束时保留已提交、当前未提交及未来未公开的检查点。执行模型故障和关闭浏览器故障不取消已有验收。单项无效输出产生关联的系统 error，合法 failed 和证据不足 error 则保存在各自 Verdict，均不回传执行模型。
+- 规范与规格双轨审查复现了回执保存失败后的阶段公开与错误归属问题，以及后台验收 span 的父作用域错误。已修正并补充回归。预算场景改用显式测试参数，实际完成顺序以持久化事件为准。
+- 检查点定向测试 `uv run python -m unittest discover -s tests -p 'test_checkpoint_*.py' -v` 发现并运行 9 项，全部通过。
+- 全量 `uv run python -m unittest discover -s tests -v` 在当前工作区发现并运行 93 项，69.296 秒，全部通过。从暂存区导出的独立代码快照运行 91 项，62.310 秒，全部通过。工作区额外两项测试来自既有模型服务改动。
+- `uv run ruff check .`、`uv run ruff format --check .`（77 个文件）、`uv run pyright`（0 errors）和 `git diff --check` 均通过。14 份执行计划与工单文档中的 49 个本地链接目标均可访问。

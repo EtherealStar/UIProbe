@@ -205,8 +205,10 @@ class ExecutionAgent:
 
         async def after_response(ctx, *, request_context, response):
             nonlocal seen
+            ctx.deps.submitted_in_response = False
             context.history.append(response)
-            seen = len(request_context.messages) + 1
+            # The provider view may merge requests. The cursor tracks native run history.
+            seen += 1
             with record.writing("save_execution_history"):
                 record.save_messages(context.history, context.browser_state.screenshot)
             return response
@@ -220,7 +222,7 @@ class ExecutionAgent:
                 ProcessHistory(capture),
                 Hooks(after_model_request=after_response),
             ],
-            instructions="Read the current checkpoint and browser observation. Use submit_checkpoint to submit the current screenshot for independent verification. After submission, return final text. If execution cannot continue, explain why in final text.",
+            instructions="Read the current checkpoint and browser observation. Use submit_checkpoint to submit the current screenshot for independent verification. Wait for the receipt before continuing. Follow next_checkpoint in the receipt when present. Return final text after the last submission or explain why execution cannot continue.",
         )
         agent.instrument = instrumentation()
 

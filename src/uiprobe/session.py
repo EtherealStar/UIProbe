@@ -1,6 +1,7 @@
 """Run-local browser, execution and independent verification lifecycle."""
 
 import asyncio
+from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from uuid import uuid4
@@ -68,8 +69,8 @@ class Session:
             prepared.test_case,
             [CheckpointResult(item.id) for item in prepared.test_case.checkpoints],
         )
-        checkpoint = prepared.test_case.checkpoints[0]
-        entry = result.checkpoints[0]
+        checkpoints = prepared.test_case.checkpoints
+        current_index = 0
         diagnostics = []
         try:
             record = self.recorder.begin(
@@ -88,8 +89,12 @@ class Session:
             result.stop_reason = "recording_error"
             return result
         bind_record(record)
+        verification_context = copy_context()
 
-        submission_record: SubmissionRecord | None = None
+        verifications: list[
+            tuple[CheckpointResult, SubmissionRecord, asyncio.Task[None]]
+        ] = []
+        verification_slots = asyncio.Semaphore(config.verification_concurrency)
         browser = None
         context = None
         cancelled = False
@@ -100,8 +105,10 @@ class Session:
         def accept_checkpoint(
             checkpoint_id: str, screenshot: Screenshot
         ) -> CheckpointReceipt:
-            nonlocal submission_record
-            if checkpoint_id != checkpoint.id or entry.state != "not_submitted":
+            nonlocal current_index
+            checkpoint = checkpoints[current_index]
+            entry = result.checkpoints[current_index]
+            if checkpoint_id != checkpoint.id or entry.submission_id is not None:
                 raise CheckpointRejected("Submit the current checkpoint once.")
             evidence = CheckpointSubmission(
                 uuid4().hex,
@@ -115,26 +122,41 @@ class Session:
                 candidate.save_input()
             with candidate.writing("append_submission"):
                 candidate.append({"type": "submission"})
-            submission_record = candidate
+            task = asyncio.create_task(
+                verify(entry, candidate), context=verification_context.copy()
+            )
+            verifications.append((entry, candidate, task))
             entry.submission_id = evidence.submission_id
             entry.screenshot_id = screenshot.screenshot_id
             entry.state = "queued"
             fact("checkpoint_submitted", **candidate.association)
+            next_checkpoint = None
+            if current_index + 1 < len(checkpoints):
+                current_index += 1
+                next_checkpoint = checkpoints[current_index]
             return CheckpointReceipt(
-                evidence.submission_id, checkpoint.id, screenshot.screenshot_id
+                evidence.submission_id,
+                checkpoint.id,
+                screenshot.screenshot_id,
+                next_checkpoint,
             )
 
         def add_failure(exc, phase, operation, code, message):
             error, diagnostic = describe(exc, phase, operation, code, message)
-            if phase == "execution":
+            if phase == "execution" and context is not None:
+                entry = next(
+                    item
+                    for item in result.checkpoints
+                    if item.checkpoint_id == context.checkpoint.id
+                )
                 error = replace(
                     error,
-                    checkpoint_id=checkpoint.id,
+                    checkpoint_id=entry.checkpoint_id,
                     submission_id=entry.submission_id,
                 )
-                diagnostic["checkpoint_id"] = checkpoint.id
-                if entry.submission_id is not None:
-                    diagnostic["submission_id"] = entry.submission_id
+                diagnostic["checkpoint_id"] = error.checkpoint_id
+                if error.submission_id is not None:
+                    diagnostic["submission_id"] = error.submission_id
             result.errors.append(error)
             diagnostics.append(diagnostic)
             return error
@@ -154,8 +176,9 @@ class Session:
                     "Cannot close browser",
                 )
 
-        def finish_verification_error(candidate: SubmissionRecord, reason: str):
-            evidence = candidate.submission
+        def finish_verification_error(
+            entry: CheckpointResult, evidence: CheckpointSubmission, reason: str
+        ):
             entry.verdict = Verdict(
                 evidence.submission_id,
                 "error",
@@ -165,14 +188,14 @@ class Session:
                 ],
             )
 
-        async def verify(candidate: SubmissionRecord):
-            assert self.verification is not None
+        async def verify(entry: CheckpointResult, candidate: SubmissionRecord):
             evidence = candidate.submission
             try:
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise TimeoutError
-                entry.state = "running"
-                async with asyncio.timeout_at(deadline):
+                assert self.verification is not None
+                async with asyncio.timeout_at(deadline), verification_slots:
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError
+                    entry.state = "running"
                     with candidate.writing("append_verification_started"):
                         candidate.append({"type": "verification_started"})
                     entry.verdict = await self.verification.evaluate(
@@ -199,7 +222,7 @@ class Session:
                     )
                 )
                 finish_verification_error(
-                    candidate, f"{error.message}; error_id={error.error_id}"
+                    entry, evidence, f"{error.message}; error_id={error.error_id}"
                 )
             finally:
                 if entry.verdict is not None:
@@ -236,8 +259,8 @@ class Session:
                 ):
                     record.save_screenshot(state.screenshot)
                 result.last_screenshot_id = state.screenshot.screenshot_id
-                context = Context(checkpoint, list(config.data_values), state)
-                entry.state = "not_submitted"
+                context = Context(checkpoints[0], list(config.data_values), state)
+                result.checkpoints[0].state = "not_submitted"
                 phase = "execution"
                 assert self.agent is not None
                 result.execution_outcome = await self.agent.execute(
@@ -286,36 +309,51 @@ class Session:
         result.action_count = budget.action_count
         if context is not None:
             result.last_screenshot_id = context.browser_state.screenshot.screenshot_id
+            current_entry = result.checkpoints[current_index]
+            # A registered submission can outlive a receipt that failed to publish.
+            if (
+                current_entry.state == "not_reached"
+                and current_entry.checkpoint_id == context.checkpoint.id
+            ):
+                current_entry.state = "not_submitted"
         closing = asyncio.create_task(close_browser())
-        judging = (
-            asyncio.create_task(verify(submission_record))
-            if submission_record is not None
-            and not cancelled
-            and not record.failures
-            and not any(error.phase == "recording" for error in result.errors)
-            else None
+        tasks = [task for _, _, task in verifications]
+        recording_failure = next(
+            (
+                error
+                for error in [*result.errors, *(error for error, _ in record.failures)]
+                if error.phase == "recording"
+            ),
+            None,
         )
+        if cancelled or recording_failure is not None:
+            for task in tasks:
+                task.cancel()
         try:
-            if judging is not None:
-                await judging
+            await asyncio.gather(
+                *tasks, return_exceptions=cancelled or recording_failure is not None
+            )
             await asyncio.shield(closing)
         except asyncio.CancelledError:
             cancelled = True
             if result.stop_reason != "execution_completed":
                 result.stop_reason = "cancelled"
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.shield(closing)
-        if submission_record is not None:
+        for entry, submission_record, _ in verifications:
             if entry.verdict is None:
-                finish_verification_error(
-                    submission_record,
-                    "Session cancelled" if cancelled else "Session recording failed",
-                )
+                reason = "Session cancelled"
+                if recording_failure is not None and not cancelled:
+                    reason = f"{recording_failure.message}; error_id={recording_failure.error_id}"
+                finish_verification_error(entry, submission_record.submission, reason)
                 entry.state = "finished"
             for error, diagnostic in submission_record.failures:
                 result.errors.append(
                     replace(
                         error,
-                        checkpoint_id=checkpoint.id,
+                        checkpoint_id=entry.checkpoint_id,
                         submission_id=entry.submission_id,
                     )
                 )
