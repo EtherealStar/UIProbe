@@ -1,0 +1,26 @@
+{
+  "defaults": {
+    "entry_url": "http://127.0.0.1:8765/login.html",
+    "data_values": {
+      "username": "admin",
+      "password": "unused-on-initial-page"
+    },
+    "max_actions": 12,
+    "execution_request_limit": 24,
+    "verification_request_limit": 4,
+    "tool_call_limit": 40,
+    "tool_retry_limit": 6,
+    "verification_retry_limit": 2,
+    "verification_concurrency": 2,
+    "timeout_seconds": 180,
+    "output_dir": ".scratch/serial-async-agent/runs"
+  },
+  "case_overrides": {
+    "login": {
+      "entry_url": "http://127.0.0.1:8765/login.html#login",
+      "data_values": {
+        "password": "123456"
+      }
+    }
+  }
+}

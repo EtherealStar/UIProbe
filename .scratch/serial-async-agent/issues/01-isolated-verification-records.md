@@ -13,4 +13,4 @@
 - [x] 现有单次路径实际使用新的记录与关联接合，而非只新增未调用的接口；不引入通用任务框架或第二套模型协议。
 - [x] 受控模型回归与现有真实本地浏览器回归通过；记录实际发现的测试数量和静态检查结果。
 
-验证见 [M1 实施证据](../../../docs/exec-plans/serial-async-agent/progress.md#2026-11-20-m1-实施证据)。
+验证见 [M1 实施证据](../../../docs/exec-plans/completed/serial-async-agent/progress.md#2026-11-20-m1-实施证据)。

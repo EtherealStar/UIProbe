@@ -1,6 +1,6 @@
 # Execution
 
-本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../.scratch/serial-async-agent/issues/)。01—09 已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
+本文定义批次、接合点和验证方法。下表拆分已获用户确认，十张票据已发布至本地 [issues](../../../../.scratch/serial-async-agent/issues/)。所有票据均已完成。具体源码位置集中在本计划，当前实施和验证记录见 [progress](progress.md)。
 
 ## 票据与阻塞关系
 
@@ -15,15 +15,15 @@
 | 07（已完成） | 后台记录故障主动停止当前及后续 Case | 03、04 | M4 |
 | 08（已完成） | 硬截止时间与取消快照跨批次收尾 | 03、04 | M4 |
 | 09（已完成） | 批次资源及追踪收尾故障归属正确 | 03 | M4 |
-| 10 | CLI 样例、组合回归与真实模型验收 | 05、06、07、08、09 | M5 |
+| 10（已完成） | CLI 样例、组合回归与真实模型验收 | 05、06、07、08、09 | M5 |
 
-只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。当前可执行票据为 10。
+只列直接阻塞边。03 与 04 在 02 后分别扩展批次和单 Case；两者集成在 07／08。05／06 不依赖多 Case 调度，09 不依赖多检查点。
 
 ## M1：隔离现有验收材料与追踪归属（已完成）
 
 ### Batch 01：在现有生产路径中建立固定归属（已完成）
 
-检查 `verification.py`、`recording.py`、`observability.py` 和 Session 的验收调用。先抽出验收所需的冻结输入、专属记录句柄和固定子作用域，再让现有单终态路径使用它们；新数据类型按 [共享契约](../../design/contracts.md) 的所有者放置，不建立通用协议。为后续 Suite 根作用域保留接合，当前无 suite_id 的旧路径不伪造批次事实。
+检查 `verification.py`、`recording.py`、`observability.py` 和 Session 的验收调用。先抽出验收所需的冻结输入、专属记录句柄和固定子作用域，再让现有单终态路径使用它们；新数据类型按 [共享契约](../../../design/contracts.md) 的所有者放置，不建立通用协议。为后续 Suite 根作用域保留接合，当前无 suite_id 的旧路径不伪造批次事实。
 
 每份验收材料有独立输入、历史、发送视图与诊断关联；共享 PNG 使用原图引用。保留主故障、最终历史保存故障及在线告警的分类，不以共享 failures 列表充当未来异步通知。
 
@@ -35,7 +35,7 @@
 
 ### Batch 02：第一条新格式完整路径（已完成）
 
-按 [输入准备](../../design/modules/case-input.md) 在 `case_input.py` 引入目标 Case／检查点及配置契约和 prepare_suite；先贯通单 Case 单检查点的完整成功与非法输入路径。新增 `suite_runner.py`，将资源创建能力、根作用域和最终 Suite 保存接到入口。Case 来源读取移入输入准备，不在根作用域外先读完用例或创建客户端；配置文件及模型配置读取失败也交付批次启动事实。Session.run 改为只接受 PreparedCase，输入错误属于 Suite／输入条目，不创建伪 Session。
+按 [输入准备](../../../design/modules/case-input.md) 在 `case_input.py` 引入目标 Case／检查点及配置契约和 prepare_suite；先贯通单 Case 单检查点的完整成功与非法输入路径。新增 `suite_runner.py`，将资源创建能力、根作用域和最终 Suite 保存接到入口。Case 来源读取移入输入准备，不在根作用域外先读完用例或创建客户端；配置文件及模型配置读取失败也交付批次启动事实。Session.run 改为只接受 PreparedCase，输入错误属于 Suite／输入条目，不创建伪 Session。
 
 在 `observation.py` 和相关拥有者引入 ExecutionOutcome、CheckpointSubmission／Receipt／Result、RunError 和批次结果的首批用途。工具注入 accept_checkpoint 小能力，注册固定 submit_checkpoint(checkpoint_id)，初图也能提交；Agent 正常最终文本只形成 ExecutionOutcome。专属记录、事实保存和验收登记完成后才确认提交；无提交的最终文本形成 execution_incomplete。执行退出后开始 Browser 清理，验收仅依赖固定材料；最基本的取消／清理路径随本批交付。
 
@@ -59,7 +59,7 @@
 
 ### Batch 04：逐段公开、冻结提交及有界协调（已完成）
 
-在 `session.py` 的 run 局部状态中维护完整账本、验收登记与并发上限；Context 只持有第一阶段及后来成功回执。沿一次 Agent.execute 延续 TODO、原生历史和预算，不为每阶段重建 Agent。按 [提交成立](../../design/modules/runner.md#提交成立与阶段推进) 排列保存、登记、推进及回执；回执失败保留已成立的提交。
+在 `session.py` 的 run 局部状态中维护完整账本、验收登记与并发上限；Context 只持有第一阶段及后来成功回执。沿一次 Agent.execute 延续 TODO、原生历史和预算，不为每阶段重建 Agent。按 [提交成立](../../../design/modules/runner.md) 排列保存、登记、推进及回执；回执失败保留已成立的提交。
 
 动作及提交共用原生串行路径，另外识别模型响应边界；不能仅依赖 sequential。测试同响应“动作→提交→动作／再次提交”，拒绝后两者且不泄露下一阶段；下一轮收到回执才能操作。工具定义不枚举未来 ID，拒绝反馈不解释未来阶段内容。多个阶段可复用同一初图或已保存图。
 
@@ -121,9 +121,9 @@ Session 启动才建立单调 deadline，覆盖初始化、执行、排队、验
 
 验证：`test_suite_runner.py` 使用真实本地 Chromium 和 HTTP OTLP 接收端验证跨 Case 关联及载荷；`test_suite_finalization.py`、`test_combined_failures.py`、`test_initialization_diagnostics.py` 和 `test_export_failures.py` 验证故障归属及收尾限制。
 
-## M5：命令行交付与真实模型证据齐备
+## M5：命令行交付与真实模型证据齐备（已完成）
 
-### Batch 10：最终组合验收
+### Batch 10：最终组合验收（已完成）
 
 更新 `README.md` 与演示样例，清除旧默认格式、SessionResult 标准输出和“验收后才关闭窗口”的说明。保留历史样例时明确其不用于新入口；不提供兼容自动转换。计划新增 `login-demo/serial-async-suite.json`、`login-demo/serial-async-config.json`：两个合法 Case，其中一条至少两个检查点，覆盖初图零动作和引用登录，默认配置通过覆盖给不同入口／引用。
 
@@ -145,6 +145,7 @@ uv run python -m unittest discover -s tests -p 'test_checkpoint_failures.py' -v
 uv run python -m unittest discover -s tests -p 'test_async_recording_failure.py' -v
 uv run python -m unittest discover -s tests -p 'test_async_lifecycle.py' -v
 uv run python -m unittest discover -s tests -p 'test_suite_finalization.py' -v
+uv run python -m unittest discover -s tests -p 'test_serial_async_cli.py' -v
 ~~~
 
 变更 Python 时对实际修改文件运行 Ruff。每个批次均涉及共享契约、跨模块行为或持久化，提交前运行：
@@ -165,7 +166,7 @@ git diff --check
 uv run python -m http.server 8765 --bind 127.0.0.1 --directory login-demo
 ~~~
 
-Batch 10 交付新样例后运行：
+使用完整样例运行：
 
 ~~~bash
 uv run python -m uiprobe --help

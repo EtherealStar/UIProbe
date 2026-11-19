@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         "--case",
         type=Path,
         required=True,
-        help="JSON with one case or an ordered list of cases",
+        help='JSON with one case object or a batch object {"cases": [...]}',
     )
     parser.add_argument(
         "--config",

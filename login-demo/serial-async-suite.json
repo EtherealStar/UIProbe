@@ -1,0 +1,62 @@
+{
+  "cases": [
+    {
+      "id": "initial-login",
+      "name": "初始登录页",
+      "checkpoints": [
+        {
+          "id": "login-page",
+          "execution": {
+            "goal": "确认初始登录页",
+            "instructions": [
+              "直接使用 submit_checkpoint 提交初始截图，无需创建 TODO 或操作页面。收到回执后用最终文本结束。"
+            ]
+          },
+          "assertions": [
+            {
+              "id": "login_form_visible",
+              "expected": "截图显示账号登录标题、账号和密码输入框以及登录按钮。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "login",
+      "name": "从登录页进入首页",
+      "checkpoints": [
+        {
+          "id": "before-login",
+          "execution": {
+            "goal": "提交操作前的登录页",
+            "instructions": [
+              "直接使用 submit_checkpoint 提交初始截图。收到回执后按公开的下一检查点继续。"
+            ]
+          },
+          "assertions": [
+            {
+              "id": "form_before_login",
+              "expected": "截图显示未登录的账号登录表单。"
+            }
+          ]
+        },
+        {
+          "id": "home",
+          "execution": {
+            "goal": "使用数据引用登录并提交登录后的首页",
+            "instructions": [
+              "创建 TODO。点击账号输入框，再使用 fill_value 按 username 引用填写。点击密码输入框，再按 password 引用填写。",
+              "点击登录。观察到首页后，使用 submit_checkpoint 提交当前截图，收到回执后用最终文本结束。"
+            ]
+          },
+          "assertions": [
+            {
+              "id": "home_visible",
+              "expected": "截图显示首页，以及登录成功、欢迎 admin 的信息。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

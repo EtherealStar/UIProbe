@@ -2,10 +2,10 @@
 
 ## Current State
 
-- Status：in progress，M1—M4／01—09 已完成。
-- Current milestone：M5，剩余完整 CLI 样例、组合回归和真实模型演示。
+- Status：completed，全部里程碑已验收，计划已归档。
+- Final milestone：命令行交付、组合回归和真实模型演示已完成。
 - Last updated：2026-11-20，Asia/Shanghai。
-- Tracker：本地文件。01—09 为 completed，10 为 ready-for-agent，执行顺序见 [依赖表](execution.md#票据与阻塞关系)。
+- Tracker：本地文件。全部票据为 completed，执行顺序见 [依赖表](execution.md#票据与阻塞关系)。
 
 ## Milestones And Batches
 
@@ -22,8 +22,8 @@
   - [x] 07：后台必要记录故障主动停机和批次停调。
   - [x] 08：硬截止时间、取消快照交接及有界保存。
   - [x] 09：共享资源、追踪和最终保存故障归属。
-- [ ] M5：命令行交付与真实模型证据齐备。
-  - [ ] 10：完整样例、组合回归与真实模型演示。
+- [x] M5：命令行交付与真实模型证据齐备。
+  - [x] 10：完整样例、组合回归与真实模型演示。
 
 ## Surprises And Discoveries
 
@@ -43,10 +43,10 @@
 - [计划入口](plan.md)
 - [批次、依赖与验证命令](execution.md)
 - [执行决定与待验证接合](decisions.md)
-- [十张已发布工单](../../../.scratch/serial-async-agent/issues/)
-- [已完成的票据 01](../../../.scratch/serial-async-agent/issues/01-isolated-verification-records.md)
-- [已完成的显式检查点提交](../../../.scratch/serial-async-agent/issues/02-explicit-single-checkpoint.md)与[批次预检和串行调度](../../../.scratch/serial-async-agent/issues/03-serial-suite-input.md)
-- [已完成的逐段公开与有界验收](../../../.scratch/serial-async-agent/issues/04-async-checkpoint-pipeline.md)
+- [十张已发布工单](../../../../.scratch/serial-async-agent/issues/)
+- [已完成的票据 01](../../../../.scratch/serial-async-agent/issues/01-isolated-verification-records.md)
+- [已完成的显式检查点提交](../../../../.scratch/serial-async-agent/issues/02-explicit-single-checkpoint.md)与[批次预检和串行调度](../../../../.scratch/serial-async-agent/issues/03-serial-suite-input.md)
+- [已完成的逐段公开与有界验收](../../../../.scratch/serial-async-agent/issues/04-async-checkpoint-pipeline.md)
 
 ## Outcomes And Retrospective
 
@@ -99,3 +99,32 @@
 - 规范和规格审查复现了 CLI 等待超时线程、取消事件与快照不一致、模型请求跨过截止时间、资源关闭等待失去上限，以及取消与记录故障竞态。上述场景已补回归。
 - `uv run python -m unittest discover -s tests -v` 在工作区发现并运行 104 项，通过。最终暂存快照独立运行 102 项，65.053 秒，全部通过。工作区额外两项测试来自已有模型服务改动。最终暂存快照包含追踪中保存超时诊断的回归。
 - `uv run ruff check .`、`uv run ruff format --check .`（81 个文件）、`uv run pyright`（0 errors）、`git diff --check`、`git diff --cached --check` 和 CLI `--help` 均通过。14 份计划与工单文档的 49 个本地链接目标均可访问。
+
+## 2026-11-20 命令行组合回归与真实模型演示
+
+- 新样例使用同一生产 CLI 串行运行初图用例和多检查点登录用例。登录用例覆盖入口和密码引用，继承默认账号引用。
+- `test_serial_async_cli.py` 的三项组合回归经生产 CLI 及应用入口运行真实本地 Chromium、受控流式模型和受控 OTLP 出口。同步点证明槽位占满时执行仍可收到回执并结束，浏览器关闭后排队验收继续，验收完成顺序可不同于声明顺序。下一条用例打开页面前，首条用例已关闭浏览器、收敛验收并写完结果。
+- 单对象失败在真实 CLI 路径返回批次 JSON 和退出码 1，混合批次的 error 返回退出码 2。混合批次覆盖非法条目、普通 failed 和 error 后继续、记录故障中断执行及后续 not_run。动作后提交绑定新截图，同一响应中提交后的动作被拒绝，达到动作上限仍可提交。取消回归确认正在请求的执行和验收退出、排队验收形成终态、批次保存后取消继续传播。组合回归核对并列目录、唯一批次 trace、PNG 引用和 OTLP 载荷。
+
+- 规范审查后改用实际页面打开顺序验证串行，并在验收事件保存后发出完成信号。规格审查后补充了单对象失败的生产 CLI 回归。
+
+- 定向 `uv run --locked python -m unittest discover -s tests -p 'test_serial_async_cli.py' -v` 发现并运行 3 项，全部通过。全量 `uv run --locked python -m unittest discover -s tests -v` 在工作区运行 107 项（75.086 秒），暂存快照独立运行 105 项（68.807 秒），全部通过。工作区额外两项来自既有模型服务改动。
+- Ruff 检查、Ruff 格式检查、Pyright、CLI `--help` 和 Git 空白检查均通过。工作区和暂存快照各校验 15 份文档中的 52 个本地链接及锚点。
+
+### 真实模型运行
+
+2026-11-20 01:47（Asia/Shanghai）使用模型 `cline-pass/deepseek-v4.1-flash-1017`，按 README 启动本地页面后运行：
+
+~~~bash
+uv run --locked python -m uiprobe --case login-demo/serial-async-suite.json --config login-demo/serial-async-config.json --headed
+~~~
+
+CLI 退出码为 0，批次状态为 passed，退出原因为 suite_completed，无运行错误。产物根目录为 `.scratch/serial-async-agent/runs/`，其下保存命令标准输出 `demo-stdout.json` 及以下三个目录：
+
+| 产物 | 目录标识 | 结果 |
+|---|---|---|
+| 批次 | `2d3c20bbb26d4d489816c54176149525` | `result.json`、`events.jsonl`、唯一的 `trace.json`，trace_id 为 `4788802c5a5cd3bf9bb53cdfe9ba1d9b` |
+| 初图用例 | `e1e425374ad245b2bfbde1a2f72afdc3` | `login-page` 引用 `screen-1` 并通过，0 个动作、1 张截图 |
+| 登录用例 | `71091ef9cff4491dbc4d0f443a1c5d21` | `before-login` 引用 `screen-1`、`home` 引用 `screen-6`，均通过，5 个动作、6 张截图 |
+
+两条用例均以 execution_completed 结束。检查了真实执行首个请求的阶段可见性、每个提交的验收历史和请求、图片引用及批次追踪。真实运行使用本地追踪。个人 Langfuse 在线验收仍归观测计划。

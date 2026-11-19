@@ -2,7 +2,7 @@
 
 ## 2026-11-15：以已采用的模块设计为目标
 
-Decision：本计划实施“Case 串行、Case 内检查点异步验收”，不重新设计调度或引入验收返工。约束取自 [系统架构](../../design/system-architecture.md)、[共享契约](../../design/contracts.md) 及 [模块索引](../../design/modules/README.md)。
+Decision：本计划实施“Case 串行、Case 内检查点异步验收”，不重新设计调度或引入验收返工。约束取自 [系统架构](../../../design/system-architecture.md)、[共享契约](../../../design/contracts.md) 及 [模块索引](../../../design/modules/README.md)。
 
 Context：工作区正式文档已经采用新设计，但生产代码仍是旧单终态路径；讨论稿和 GLOSSARY 的旧说法不能替代目标契约。
 
@@ -28,7 +28,7 @@ Consequences：不因触碰相同文件增加虚假阻塞；只有阻塞已完�
 
 Decision：沿用已有本地文件 tracker 和 ready-for-agent 词汇。用户确认十张工单的拆分及阻塞关系后，已将逐票草案迁移至 `.scratch/serial-async-agent/issues/`，一票一个文件，按依赖编号。
 
-Context：[MVP 的明确发布决定](../uiprobe-mvp/decisions.md) 记录用户已确认本地渠道，[观测计划进度](../observability-error-handling/progress.md) 继续沿用；不需要重复初始化 tracker。
+Context：[MVP 的明确发布决定](../../uiprobe-mvp/decisions.md) 记录用户已确认本地渠道，[观测计划进度](../../observability-error-handling/progress.md) 继续沿用；不需要重复初始化 tracker。
 
 Consequences：遵循用户调用的 to-tickets，先展示题目、直接阻塞与交付行为，取得确认后发布。十张工单均为 ready-for-agent，正文及依赖与获批草案一致，仅更新状态和位置；初始执行前沿为 01。发布不代表实施完成，不修改或关闭旧票据。
 
@@ -79,3 +79,9 @@ Consequences：明确检查实际请求视图、工具定义、拒绝反馈、�
 - Session 协调器按一个单调截止时间等待执行和验收。原生模型请求在同步请求记录写入后再次检查剩余时间。浏览器和共享客户端各有独立的关闭等待时限。
 - 最终保存使用独立快照和有界后台工作线程，CLI 退出不等待已超时的线程。保存期间发生取消时，在剩余收尾时间内补写取消事件及结果，已有终态事件和错误记录各保留一次。
 - 批次根追踪随共享客户端关闭结束，在线导出和本地追踪保存各自收尾，最后保存 SuiteResult。迟到的追踪文件不进入已交付的可用路径。
+
+## 2026-11-20 命令行样例和验收证据
+
+- 初图用例独立验证零动作路径。登录用例覆盖登录前后的两次提交，使用独立入口和密码覆盖，继承共享账号引用。
+- 组合回归使用临时输出目录、真实 Chromium、受控流式响应和 OTLP 载荷。同步点分别控制执行请求、验收槽位和关闭页面，实际请求顺序与保存结果均可核对。
+- 真实模型演示使用有窗口 CLI，验收标识与结论记入进度。截图、请求历史及追踪保留在本地运行目录。

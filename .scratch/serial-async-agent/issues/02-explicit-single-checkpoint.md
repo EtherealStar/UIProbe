@@ -15,4 +15,4 @@
 - [x] 共享资源由 Suite 创建并关闭，根追踪与批次结果在收尾后保存；批次和会话记录独占并列目录，调用方取得结果后不再回写最后 Case。
 - [x] CLI 保留原有选项及 0／1／2 退出码，stdout 为 SuiteResult；最小样例和受影响既有回归随切片迁移，真实本地页面与受控原生模型验证完整路径。
 
-验证见 [新格式单检查点与串行批次实施证据](../../../docs/exec-plans/serial-async-agent/progress.md#2026-11-20-新格式单检查点与串行批次实施证据)。
+验证见 [新格式单检查点与串行批次实施证据](../../../docs/exec-plans/completed/serial-async-agent/progress.md#2026-11-20-新格式单检查点与串行批次实施证据)。

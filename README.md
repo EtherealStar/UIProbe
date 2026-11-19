@@ -1,7 +1,6 @@
 # UIProbe
 
-按[模块设计](docs/design/modules/README.md)实现截图驱动的单条浏览器测试。
-已提供浏览器测试命令行、独立视觉验收与本地产物；模型使用 Chat Completions 接口。
+UIProbe 串行运行截图驱动的浏览器测试用例。单条用例内，已提交的检查点接受独立视觉验收，执行 Agent 可以继续操作页面。模型使用 Chat Completions 接口。详见[模块设计](docs/design/modules/README.md)。
 
 安装依赖，复制配置模板，再填写模型服务的地址、密钥和模型名：
 
@@ -86,30 +85,31 @@ uv run --locked python -m http.server 8765 --bind 127.0.0.1 --directory login-de
 
 ~~~bash
 uv run --locked python -m uiprobe --help
-uv run --locked python -m uiprobe --case login-demo/mvp-case.json --config login-demo/mvp-config.json
-uv run --locked python -m uiprobe --case login-demo/mvp-initial-case.json --config login-demo/mvp-config.json
+uv run --locked python -m uiprobe --case login-demo/serial-async-suite.json --config login-demo/serial-async-config.json
 ~~~
 
-登录用例使用 username 和 password 数据引用。初图用例使用 `submit_checkpoint` 提交初始截图，预期 `action_count=0`。当前运行入口支持单检查点用例。用例文件接受一个带 `id`、`name`、`checkpoints` 的对象，或 `{"cases": [...]}` 有序批次。
+示例包含两个用例。初图用例直接提交截图，预期 `action_count=0`。登录用例先提交登录页，再使用 `username` 和 `password` 数据引用填写并登录，最后提交首页截图。
+
+用例文件接受带 `id`、`name`、`checkpoints` 的单个对象，或 `{"cases": [...]}` 有序批次。每个检查点声明执行说明和断言。历史用例清单 `login-demo/test-cases.json` 使用旧结构，当前入口只接受检查点结构。
 
 实时观看 agent 操作时，加上 `--headed` 打开受控 Chromium 窗口：
 
 ~~~bash
-uv run --locked python -m uiprobe --case login-demo/mvp-case.json --config login-demo/mvp-config.json --headed
+uv run --locked python -m uiprobe --case login-demo/serial-async-suite.json --config login-demo/serial-async-config.json --headed
 ~~~
 
-默认不显示窗口。有窗口模式需要可用的桌面显示环境（WSL 需要 WSLg 或 X 服务），页面视口仍固定为 1280×720。观看时避免手动操作页面，以免改变 agent 的观察状态；执行结束后窗口自动关闭。
+默认不显示窗口。有窗口模式需要可用的桌面显示环境（WSL 需要 WSLg 或 X 服务），页面视口仍固定为 1280×720。观看时避免手动操作页面，以免改变 Agent 的观察状态。执行结束后窗口关闭，此时已提交的检查点仍可能在验收。
 
-运行配置在 `defaults` 中提供入口、引用值、预算、时限和输出目录。可选的 `case_overrides` 按 Case ID 覆盖 `entry_url` 和 `data_values`。整个批次先完成输入校验，合法 Case 按输入顺序运行。
+运行配置在 `defaults` 中提供入口、引用值、预算、时限和输出目录。可选的 `case_overrides` 按用例 ID 替换 `entry_url`，并按引用名合并 `data_values`。示例为登录用例覆盖入口和密码引用，账号引用继承默认值。`verification_concurrency` 限制单条用例内同时验收的检查点数。批次先完成输入校验，再按输入顺序运行合法用例。上一条用例的验收、浏览器关闭和最终记录全部结束后，才启动下一条。
 
 标准输出为 `SuiteResult` JSON。passed、failed、error 分别对应退出码 0、1、2。每个输入条目都可通过 `cases[].source.case_index` 定位。合法运行的结果保存于该条目的 `session_result`，包括执行总结、各检查点状态和独立验收结论。缺少模型配置时返回批次错误，合法条目标记为 `not_run`。
 
 每次运行在 `output_dir` 下创建并列的批次和会话目录。批次目录保存 `result.json`、`events.jsonl` 和全批 `trace.json`。会话目录保存 `result.json`、完整执行历史、实际模型请求和截图。通过 `checkpoints[].submission_id` 可找到 `submissions/<submission_id>/` 中的验收输入、历史和请求。验收材料引用已有 PNG，`artifact_paths` 列出可用产物。
 
-真实模型验收状态见[串行批次与检查点计划进度](docs/exec-plans/serial-async-agent/progress.md)。离线回归不调用真实模型：
+真实模型验收证据见[串行批次与检查点计划进度](docs/exec-plans/completed/serial-async-agent/progress.md)。运行离线组合回归：
 
 ~~~bash
-uv run --locked python -m unittest discover -s tests -p 'test_mvp_e2e.py' -v
+uv run --locked python -m unittest discover -s tests -p 'test_serial_async_cli.py' -v
 ~~~
 
 执行模型的实际请求保存在 `execution-requests.jsonl`。验收 span 关联批次、会话、检查点、提交和截图编号。配置 LANGFUSE_BASE_URL、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY 可启用 Langfuse OTLP 导出。在线追踪中的图片用引用表示，导出故障只标记观测不完整。退出提交等待最多 2.5 秒，远端逐条投递状态为 unknown。

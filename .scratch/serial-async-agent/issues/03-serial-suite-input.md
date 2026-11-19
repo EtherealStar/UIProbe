@@ -15,4 +15,4 @@
 - [x] Case passed、failed 或普通 error 后继续；不重跑。每条运行独占 Browser、Context、预算和记录，共享客户端跨 Case 复用并只在批次收尾关闭。
 - [x] 真实本地页面和受控模型通过混合输入、顺序与状态隔离回归；批次只有一份完整 trace，子作用域不会被后续 Case 覆盖。
 
-验证见 [新格式单检查点与串行批次实施证据](../../../docs/exec-plans/serial-async-agent/progress.md#2026-11-20-新格式单检查点与串行批次实施证据)。
+验证见 [新格式单检查点与串行批次实施证据](../../../docs/exec-plans/completed/serial-async-agent/progress.md#2026-11-20-新格式单检查点与串行批次实施证据)。

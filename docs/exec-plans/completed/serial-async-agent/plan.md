@@ -16,15 +16,15 @@
 
 ## Design References
 
-- [系统架构](../../design/system-architecture.md)：串行批次、异步检查点和状态所有权。
-- [共享契约](../../design/contracts.md)：输入、提交、阶段、预算、状态及结果合成的唯一字段来源。
-- [模块索引](../../design/modules/README.md)、[输入准备](../../design/modules/case-input.md)、[SuiteRunner](../../design/modules/suite-runner.md)：整批准备、条目顺序、配置覆盖和批次生命周期。
-- [Session](../../design/modules/runner.md)：提交成立、验收协调、执行退出后的页面释放及取消交接。
-- [Agent](../../design/modules/agent.md)、[Context](../../design/modules/context.md)、[工具调用](../../design/modules/actions.md)、[具体工具](../../design/modules/tools.md)：一次循环、逐段公开、响应屏障和工具可用性。
-- [Browser](../../design/modules/browser.md)、[Verification](../../design/modules/verification.md)：已有动作接合、冻结截图及独立输出校验。
-- [Recorder](../../design/modules/recording.md)、[Observability](../../design/modules/observability.md)、[运行追踪接合](../../design/modules/observability-runtime.md)：提交专属材料、固定追踪关联和一批一份 trace。
-- [Error Handling](../../design/modules/error-handling.md)、[模型连接](../../design/modules/model.md)：故障所属层级、取消控制流和共享连接关闭。
-- [MVP 进度](../uiprobe-mvp/progress.md)、[观测与错误处理进度](../observability-error-handling/progress.md)：现有实现与历史证据。旧计划的验收状态不由本计划补记。
+- [系统架构](../../../design/system-architecture.md)：串行批次、异步检查点和状态所有权。
+- [共享契约](../../../design/contracts.md)：输入、提交、阶段、预算、状态及结果合成的唯一字段来源。
+- [模块索引](../../../design/modules/README.md)、[输入准备](../../../design/modules/case-input.md)、[SuiteRunner](../../../../src/uiprobe/suite_runner.py)：整批准备、条目顺序、配置覆盖和批次生命周期。
+- [Session](../../../design/modules/runner.md)：提交成立、验收协调、执行退出后的页面释放及取消交接。
+- [Agent](../../../design/modules/agent.md)、[Context](../../../design/modules/context.md)、[工具调用](../../../design/modules/actions.md)、[具体工具](../../../design/modules/tools.md)：一次循环、逐段公开、响应屏障和工具可用性。
+- [Browser](../../../design/modules/browser.md)、[Verification](../../../design/modules/verification.md)：已有动作接合、冻结截图及独立输出校验。
+- [Recorder](../../../design/modules/recording.md)、[Observability](../../../design/modules/observability.md)、[运行追踪接合](../../../design/modules/observability-runtime.md)：提交专属材料、固定追踪关联和一批一份 trace。
+- [Error Handling](../../../design/modules/error-handling.md)、[模型连接](../../../design/modules/model.md)：故障所属层级、取消控制流和共享连接关闭。
+- [MVP 进度](../../uiprobe-mvp/progress.md)、[观测与错误处理进度](../../observability-error-handling/progress.md)：现有实现与历史证据。旧计划的验收状态不由本计划补记。
 
 ## Context And Orientation
 
